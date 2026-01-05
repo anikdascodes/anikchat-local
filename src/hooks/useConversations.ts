@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { toast } from 'sonner';
 import { Conversation, generateId } from '@/types/chat';
 import { exportAsMarkdown, downloadFile } from '@/lib/export';
-import { useLocalStorage } from './useLocalStorage';
+import { storageService } from '@/lib/storageService';
+import { deleteConversationMemory } from '@/lib/memoryManager';
 
 interface UseConversationsReturn {
   conversations: Conversation[];
@@ -18,20 +19,77 @@ interface UseConversationsReturn {
 }
 
 export function useConversations(): UseConversationsReturn {
-  const [conversations, setConversations] = useLocalStorage<Conversation[]>('openchat-conversations', []);
+  const [conversations, setConversationsState] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [isLoaded, setIsLoaded] = useState(false);
+  const hasRestoredActive = useRef(false);
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const activeConversation = conversations.find((c) => c.id === activeConversationId);
 
-  // Restore active conversation from localStorage on mount
+  // Load conversations from storage on mount
   useEffect(() => {
-    const savedActiveId = localStorage.getItem('openchat-active-conversation');
-    if (savedActiveId && conversations.find(c => c.id === savedActiveId)) {
-      setActiveConversationId(savedActiveId);
-    } else if (conversations.length > 0) {
-      setActiveConversationId(conversations[0].id);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const loadConversations = async () => {
+      try {
+        // Try file system storage first
+        const ids = await storageService.listConversations();
+        if (ids.length > 0) {
+          const convs: Conversation[] = [];
+          for (const id of ids) {
+            const conv = await storageService.getConversation<Conversation>(id);
+            if (conv) convs.push(conv);
+          }
+          convs.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+          setConversationsState(convs);
+          
+          // Restore active conversation immediately after loading
+          const savedActiveId = localStorage.getItem('openchat-active-conversation');
+          if (savedActiveId && convs.find(c => c.id === savedActiveId)) {
+            setActiveConversationId(savedActiveId);
+          } else if (convs.length > 0) {
+            // Default to most recent conversation, NOT new chat
+            setActiveConversationId(convs[0].id);
+          }
+          hasRestoredActive.current = true;
+        } else {
+          // Fallback: try localStorage for migration
+          const localData = localStorage.getItem('openchat-conversations');
+          if (localData) {
+            const convs = JSON.parse(localData) as Conversation[];
+            convs.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+            setConversationsState(convs);
+            
+            // Migrate to new storage
+            for (const conv of convs) {
+              await storageService.saveConversation(conv.id, conv);
+            }
+            
+            // Restore active
+            const savedActiveId = localStorage.getItem('openchat-active-conversation');
+            if (savedActiveId && convs.find(c => c.id === savedActiveId)) {
+              setActiveConversationId(savedActiveId);
+            } else if (convs.length > 0) {
+              setActiveConversationId(convs[0].id);
+            }
+            hasRestoredActive.current = true;
+          }
+        }
+      } catch (e) {
+        console.error('Failed to load conversations:', e);
+        // Fallback to localStorage
+        const localData = localStorage.getItem('openchat-conversations');
+        if (localData) {
+          const convs = JSON.parse(localData) as Conversation[];
+          setConversationsState(convs);
+          if (convs.length > 0) {
+            setActiveConversationId(convs[0].id);
+          }
+          hasRestoredActive.current = true;
+        }
+      }
+      setIsLoaded(true);
+    };
+    loadConversations();
   }, []);
 
   // Persist active conversation ID
@@ -40,6 +98,29 @@ export function useConversations(): UseConversationsReturn {
       localStorage.setItem('openchat-active-conversation', activeConversationId);
     }
   }, [activeConversationId]);
+
+  // Save conversations with debounce
+  const saveConversations = useCallback(async (convs: Conversation[]) => {
+    // Also save to localStorage as backup
+    localStorage.setItem('openchat-conversations', JSON.stringify(convs));
+    
+    // Save each conversation to storage
+    for (const conv of convs) {
+      await storageService.saveConversation(conv.id, conv);
+    }
+  }, []);
+
+  const setConversations = useCallback((value: Conversation[] | ((prev: Conversation[]) => Conversation[])) => {
+    setConversationsState(prev => {
+      const newConvs = typeof value === 'function' ? value(prev) : value;
+      
+      // Debounced save
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+      saveTimeoutRef.current = setTimeout(() => saveConversations(newConvs), 500);
+      
+      return newConvs;
+    });
+  }, [saveConversations]);
 
   const createNewConversation = useCallback(() => {
     const newConv: Conversation = {
@@ -54,17 +135,22 @@ export function useConversations(): UseConversationsReturn {
   }, [setConversations]);
 
   const deleteConversation = useCallback(
-    (id: string) => {
-      setConversations((prev) => {
+    async (id: string) => {
+      // Delete from storage
+      await storageService.deleteConversation(id);
+      await deleteConversationMemory(id);
+      
+      setConversationsState((prev) => {
         const remaining = prev.filter((c) => c.id !== id);
-        // Update active conversation if we're deleting the current one
         if (activeConversationId === id) {
           setActiveConversationId(remaining.length > 0 ? remaining[0].id : null);
         }
+        // Update localStorage backup
+        localStorage.setItem('openchat-conversations', JSON.stringify(remaining));
         return remaining;
       });
     },
-    [activeConversationId, setConversations]
+    [activeConversationId]
   );
 
   const handleRename = useCallback(

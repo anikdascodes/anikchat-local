@@ -1,12 +1,24 @@
 import { APIConfig, Message, getActiveProviderAndModel } from '@/types/chat';
 import { prepareContext, prepareContextWithMemory, createSummarizationPrompt } from './contextManager';
-import { getImageFormatConfig, getProviderKey } from './providerUtils';
+import { getImageFormatConfig, getProviderKey, detectProviderType } from './providerUtils';
 import { storeMessage, saveConversationSummary } from './memoryManager';
+
+// Different message formats for different providers
+type OpenAIImageContent = { type: 'image_url'; image_url: { url: string; detail?: string } };
+type OpenAITextContent = { type: 'text'; text: string };
+type AnthropicImageContent = { type: 'image'; source: { type: 'base64'; media_type: string; data: string } };
+type AnthropicTextContent = { type: 'text'; text: string };
+type GeminiPart = { text: string } | { inline_data: { mime_type: string; data: string } };
 
 interface ChatMessage {
   role: 'user' | 'assistant' | 'system';
-  content: string | Array<{ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string; detail?: string } }>;
+  content: string | (OpenAITextContent | OpenAIImageContent)[] | (AnthropicTextContent | AnthropicImageContent)[];
   images?: string[];  // For Ollama format
+}
+
+interface GeminiMessage {
+  role: 'user' | 'model';
+  parts: GeminiPart[];
 }
 
 export interface StreamOptions {
@@ -116,71 +128,85 @@ export async function streamChat(options: StreamOptions): Promise<void> {
   }
 
   const apiMessages: ChatMessage[] = [];
-  const imageFormatConfig = getImageFormatConfig(provider.baseUrl);
   const providerKey = getProviderKey(provider.baseUrl);
+  const providerType = detectProviderType(provider.baseUrl);
+
+  // Helper to extract base64 and mime type from data URL
+  const parseDataUrl = (dataUrl: string): { mimeType: string; base64: string } => {
+    if (dataUrl.startsWith('data:')) {
+      const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+      if (match) {
+        return { mimeType: match[1], base64: match[2] };
+      }
+    }
+    return { mimeType: 'image/jpeg', base64: dataUrl };
+  };
 
   for (const msg of contextResult.messages) {
     const originalMsg = messages.find((m) => m.content === msg.content);
     const hasImages = originalMsg?.images && originalMsg.images.length > 0;
 
     if (hasImages) {
-      // Always try to send images - let the API decide if it supports them
-      // This allows users to use newer vision models we don't know about yet
       if (!model.isVisionModel) {
-        console.warn(`Model "${model.modelId}" is not marked as vision-capable, but images were attached. Attempting to send anyway.`);
+        console.warn(`Model "${model.modelId}" is not marked as vision-capable, but images were attached.`);
       }
 
-      // Ollama uses a separate 'images' array instead of content parts
+      // Format images based on provider
       if (providerKey === 'ollama') {
-        // Extract base64 data from data URLs for Ollama
-        const base64Images = originalMsg.images!.map(img => {
-          if (img.startsWith('data:')) {
-            return img.split(',')[1];  // Remove data:image/...;base64, prefix
-          }
-          return img;
-        });
-
+        // Ollama: separate images array with raw base64 (no prefix)
+        const base64Images = originalMsg.images!.map(img => parseDataUrl(img).base64);
         apiMessages.push({
           role: msg.role,
           content: msg.content,
           images: base64Images,
         });
-      } else {
-        // OpenAI-compatible format with image_url
-        const contentParts: Array<{ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string; detail?: string } }> = [
-          { type: 'text' as const, text: msg.content },
+      } else if (providerType === 'anthropic') {
+        // Anthropic: source object with media_type and data
+        const contentParts: (AnthropicTextContent | AnthropicImageContent)[] = [
+          { type: 'text', text: msg.content },
         ];
-
         for (const img of originalMsg.images!) {
-          if (imageFormatConfig.supportsDetailParam) {
-            contentParts.push({
-              type: 'image_url' as const,
-              image_url: { url: img, detail: 'auto' },
-            });
-          } else {
-            contentParts.push({
-              type: 'image_url' as const,
-              image_url: { url: img },
-            });
-          }
+          const { mimeType, base64 } = parseDataUrl(img);
+          contentParts.push({
+            type: 'image',
+            source: {
+              type: 'base64',
+              media_type: mimeType,
+              data: base64,
+            },
+          });
         }
-
-        apiMessages.push({
-          role: msg.role,
-          content: contentParts,
-        });
+        apiMessages.push({ role: msg.role, content: contentParts });
+      } else if (providerType === 'google-native') {
+        // Google Gemini native: inline_data format (handled separately below)
+        apiMessages.push({ role: msg.role, content: msg.content });
+      } else {
+        // OpenAI-compatible (OpenAI, OpenRouter, Groq, Together, SambaNova, etc.)
+        const contentParts: (OpenAITextContent | OpenAIImageContent)[] = [
+          { type: 'text', text: msg.content },
+        ];
+        for (const img of originalMsg.images!) {
+          // OpenAI expects full data URL
+          const imageUrl = img.startsWith('data:') ? img : `data:image/jpeg;base64,${img}`;
+          contentParts.push({
+            type: 'image_url',
+            image_url: providerKey === 'sambanova' || providerKey === 'groq'
+              ? { url: imageUrl }  // No detail param
+              : { url: imageUrl, detail: 'auto' },
+          });
+        }
+        apiMessages.push({ role: msg.role, content: contentParts });
       }
     } else {
-      apiMessages.push({
-        role: msg.role,
-        content: msg.content,
-      });
+      apiMessages.push({ role: msg.role, content: msg.content });
     }
   }
 
   const baseUrl = provider.baseUrl.replace(/\/+$/, '');
   const isOpenRouter = baseUrl.includes('openrouter.ai');
   const isSambaNova = baseUrl.includes('sambanova.ai');
+  const isAnthropic = providerType === 'anthropic';
+  const isGeminiNative = providerType === 'google-native';
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 60000);
 

@@ -88,7 +88,7 @@ export function DataSettings({
   const handleReauthorize = useCallback(async () => {
     setIsStorageLoading(true);
     try {
-      const success = await storageService.reauthorizeFileSystem();
+      const success = await storageService.reauthorize();
       if (success) {
         setNeedsReauth(false);
         setStorageDirName(storageService.getDirectoryName());

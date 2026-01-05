@@ -110,11 +110,12 @@ export function isKnownVisionModel(modelId: string, baseUrl: string): boolean {
  * Get provider-specific image format configuration
  */
 export interface ImageFormatConfig {
-    useImageUrlFormat: boolean;  // true = image_url format, false = images array
+    format: 'openai' | 'anthropic' | 'gemini' | 'ollama';
     supportsDetailParam: boolean;
     supportsUrlImages: boolean;
-    maxImageSize?: number;  // in bytes
-    maxImages?: number;
+    maxImageSize: number;  // in bytes
+    maxImages: number;
+    supportedTypes: string[];
 }
 
 export function getImageFormatConfig(baseUrl: string): ImageFormatConfig {
@@ -122,55 +123,77 @@ export function getImageFormatConfig(baseUrl: string): ImageFormatConfig {
 
     switch (providerKey) {
         case 'ollama':
+            // Ollama: separate images array with raw base64
             return {
-                useImageUrlFormat: false,  // Ollama uses images array
+                format: 'ollama',
                 supportsDetailParam: false,
-                supportsUrlImages: false,  // Only base64
+                supportsUrlImages: false,
+                maxImageSize: 100 * 1024 * 1024, // No strict limit
                 maxImages: 10,
+                supportedTypes: ['image/jpeg', 'image/png'],
+            };
+
+        case 'anthropic':
+            // Anthropic: source object with media_type and data
+            return {
+                format: 'anthropic',
+                supportsDetailParam: false,
+                supportsUrlImages: false, // API only accepts base64
+                maxImageSize: 5 * 1024 * 1024, // 5MB per image
+                maxImages: 100,
+                supportedTypes: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'],
+            };
+
+        case 'google':
+            // Google Gemini: inline_data format
+            return {
+                format: 'gemini',
+                supportsDetailParam: false,
+                supportsUrlImages: false,
+                maxImageSize: 20 * 1024 * 1024, // 20MB total request
+                maxImages: 16,
+                supportedTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'],
             };
 
         case 'sambanova':
             return {
-                useImageUrlFormat: true,
-                supportsDetailParam: false,  // SambaNova doesn't support detail
+                format: 'openai',
+                supportsDetailParam: false,
                 supportsUrlImages: true,
-                maxImageSize: 4 * 1024 * 1024,  // 4MB
+                maxImageSize: 4 * 1024 * 1024, // 4MB
+                maxImages: 1, // Vision models often limited
+                supportedTypes: ['image/jpeg', 'image/png', 'image/webp'],
             };
 
         case 'groq':
             return {
-                useImageUrlFormat: true,
+                format: 'openai',
                 supportsDetailParam: false,
                 supportsUrlImages: true,
-                maxImageSize: 4 * 1024 * 1024,  // 4MB for base64
+                maxImageSize: 4 * 1024 * 1024, // 4MB
                 maxImages: 5,
+                supportedTypes: ['image/jpeg', 'image/png', 'image/webp'],
             };
 
         case 'mistral':
             return {
-                useImageUrlFormat: true,
+                format: 'openai',
                 supportsDetailParam: false,
                 supportsUrlImages: true,
-                maxImageSize: 10 * 1024 * 1024,  // 10MB
-            };
-
-        case 'anthropic':
-            return {
-                useImageUrlFormat: false,  // Uses source.data format
-                supportsDetailParam: false,
-                supportsUrlImages: true,
-                maxImageSize: 30 * 1024 * 1024,  // 30MB
-                maxImages: 100,
+                maxImageSize: 10 * 1024 * 1024, // 10MB
+                maxImages: 8,
+                supportedTypes: ['image/jpeg', 'image/png', 'image/webp'],
             };
 
         default:
             // OpenAI and OpenAI-compatible (OpenRouter, Together, etc.)
             return {
-                useImageUrlFormat: true,
+                format: 'openai',
                 supportsDetailParam: true,
                 supportsUrlImages: true,
-                maxImageSize: 20 * 1024 * 1024,  // 20MB
-                maxImages: 500,
+                maxImageSize: 20 * 1024 * 1024, // 20MB
+                maxImages: 10,
+                supportedTypes: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'],
             };
     }
 }

@@ -1,38 +1,27 @@
 /**
- * Storage Service - Hybrid File System Access API + IndexedDB
+ * Storage Service - File System Access API for local storage
  * 
- * Provides local file storage with:
- * - File System Access API for Chrome/Edge (user picks folder)
+ * Stores ALL data (chats, media, embeddings) in user-selected folder:
+ * - File System Access API for Chrome/Edge (recommended)
  * - IndexedDB fallback for Firefox/Safari
+ * 
+ * Folder structure:
+ * /anikchat-data/
+ *   ├── conversations/     # Chat history JSON files
+ *   ├── media/            # Images and attachments
+ *   ├── embeddings/       # Vector embeddings for RAG
+ *   ├── summaries/        # Conversation summaries
+ *   └── config.json       # App configuration
  */
 
-// Extended FileSystemDirectoryHandle with permissions (Chrome-specific)
-interface ExtendedFileSystemDirectoryHandle {
-  readonly kind: 'directory';
-  readonly name: string;
-  queryPermission(descriptor?: { mode?: 'read' | 'readwrite' }): Promise<PermissionState>;
-  requestPermission(descriptor?: { mode?: 'read' | 'readwrite' }): Promise<PermissionState>;
-  getFileHandle(name: string, options?: { create?: boolean }): Promise<FileSystemFileHandle>;
-  getDirectoryHandle(name: string, options?: { create?: boolean }): Promise<ExtendedFileSystemDirectoryHandle>;
-  removeEntry(name: string, options?: { recursive?: boolean }): Promise<void>;
-  values(): AsyncIterableIterator<ExtendedFileSystemDirectoryHandle | FileSystemFileHandle>;
-}
+export type StorageType = 'filesystem' | 'indexeddb';
 
 // Check if File System Access API is supported
 export const isFileSystemSupported = (): boolean => {
   return typeof window !== 'undefined' && 'showDirectoryPicker' in window;
 };
 
-// Storage types
-export type StorageType = 'filesystem' | 'indexeddb' | 'localstorage';
-
-interface StorageConfig {
-  type: StorageType;
-  directoryHandle?: FileSystemDirectoryHandle;
-  dbName: string;
-}
-
-// IndexedDB wrapper
+// IndexedDB wrapper (fallback)
 class IndexedDBStorage {
   private dbName: string;
   private db: IDBDatabase | null = null;
@@ -43,15 +32,14 @@ class IndexedDBStorage {
   }
 
   async init(): Promise<void> {
+    if (this.db) return;
     return new Promise((resolve, reject) => {
-      const request = indexedDB.open(this.dbName, 1);
-      
+      const request = indexedDB.open(this.dbName, 2);
       request.onerror = () => reject(request.error);
       request.onsuccess = () => {
         this.db = request.result;
         resolve();
       };
-      
       request.onupgradeneeded = (event) => {
         const db = (event.target as IDBOpenDBRequest).result;
         if (!db.objectStoreNames.contains(this.STORE_NAME)) {
@@ -63,12 +51,9 @@ class IndexedDBStorage {
 
   async get<T>(key: string): Promise<T | null> {
     if (!this.db) await this.init();
-    
     return new Promise((resolve, reject) => {
-      const transaction = this.db!.transaction(this.STORE_NAME, 'readonly');
-      const store = transaction.objectStore(this.STORE_NAME);
-      const request = store.get(key);
-      
+      const tx = this.db!.transaction(this.STORE_NAME, 'readonly');
+      const request = tx.objectStore(this.STORE_NAME).get(key);
       request.onerror = () => reject(request.error);
       request.onsuccess = () => resolve(request.result ?? null);
     });
@@ -76,12 +61,9 @@ class IndexedDBStorage {
 
   async set<T>(key: string, value: T): Promise<void> {
     if (!this.db) await this.init();
-    
     return new Promise((resolve, reject) => {
-      const transaction = this.db!.transaction(this.STORE_NAME, 'readwrite');
-      const store = transaction.objectStore(this.STORE_NAME);
-      const request = store.put(value, key);
-      
+      const tx = this.db!.transaction(this.STORE_NAME, 'readwrite');
+      const request = tx.objectStore(this.STORE_NAME).put(value, key);
       request.onerror = () => reject(request.error);
       request.onsuccess = () => resolve();
     });
@@ -89,12 +71,9 @@ class IndexedDBStorage {
 
   async delete(key: string): Promise<void> {
     if (!this.db) await this.init();
-    
     return new Promise((resolve, reject) => {
-      const transaction = this.db!.transaction(this.STORE_NAME, 'readwrite');
-      const store = transaction.objectStore(this.STORE_NAME);
-      const request = store.delete(key);
-      
+      const tx = this.db!.transaction(this.STORE_NAME, 'readwrite');
+      const request = tx.objectStore(this.STORE_NAME).delete(key);
       request.onerror = () => reject(request.error);
       request.onsuccess = () => resolve();
     });
@@ -102,41 +81,29 @@ class IndexedDBStorage {
 
   async getAllKeys(): Promise<string[]> {
     if (!this.db) await this.init();
-    
     return new Promise((resolve, reject) => {
-      const transaction = this.db!.transaction(this.STORE_NAME, 'readonly');
-      const store = transaction.objectStore(this.STORE_NAME);
-      const request = store.getAllKeys();
-      
+      const tx = this.db!.transaction(this.STORE_NAME, 'readonly');
+      const request = tx.objectStore(this.STORE_NAME).getAllKeys();
       request.onerror = () => reject(request.error);
       request.onsuccess = () => resolve(request.result as string[]);
     });
   }
 
   async getStorageSize(): Promise<number> {
-    if (!this.db) await this.init();
-    
     const keys = await this.getAllKeys();
-    let totalSize = 0;
-    
+    let total = 0;
     for (const key of keys) {
       const value = await this.get(key);
-      if (value) {
-        totalSize += new Blob([JSON.stringify(value)]).size;
-      }
+      if (value) total += new Blob([JSON.stringify(value)]).size;
     }
-    
-    return totalSize;
+    return total;
   }
 
   async clear(): Promise<void> {
     if (!this.db) await this.init();
-    
     return new Promise((resolve, reject) => {
-      const transaction = this.db!.transaction(this.STORE_NAME, 'readwrite');
-      const store = transaction.objectStore(this.STORE_NAME);
-      const request = store.clear();
-      
+      const tx = this.db!.transaction(this.STORE_NAME, 'readwrite');
+      const request = tx.objectStore(this.STORE_NAME).clear();
       request.onerror = () => reject(request.error);
       request.onsuccess = () => resolve();
     });
@@ -145,454 +112,452 @@ class IndexedDBStorage {
 
 // File System Access API wrapper
 class FileSystemStorage {
-  private directoryHandle: any = null;
-  private handleKey = 'anikchat-fs-handle';
+  private rootHandle: FileSystemDirectoryHandle | null = null;
+  private dataHandle: FileSystemDirectoryHandle | null = null;
+  private handleStore = new IndexedDBStorage('anikchat-handles');
 
   async init(): Promise<boolean> {
-    // Try to restore saved directory handle (silent check only, no prompt)
     try {
-      const savedHandle = await this.getSavedHandle();
-      if (savedHandle) {
-        // Only check existing permission - don't request (that requires user gesture)
-        const permission = await savedHandle.queryPermission({ mode: 'readwrite' });
+      await this.handleStore.init();
+      const saved = await this.handleStore.get<FileSystemDirectoryHandle>('root-handle');
+      if (saved) {
+        const permission = await (saved as any).queryPermission({ mode: 'readwrite' });
         if (permission === 'granted') {
-          this.directoryHandle = savedHandle;
+          this.rootHandle = saved;
+          this.dataHandle = await this.rootHandle.getDirectoryHandle('anikchat-data', { create: true });
+          await this.ensureDirectories();
           return true;
         }
-        // Permission not granted - store handle for later re-auth
-        this.directoryHandle = savedHandle;
-        return false; // Will need user to click to re-authenticate
+        this.rootHandle = saved; // Store for re-auth
       }
-    } catch (error) {
-      console.log('No saved directory handle');
-    }
+    } catch { /* no saved handle */ }
     return false;
   }
 
   async reauthorize(): Promise<boolean> {
-    // Called on user gesture to re-request permission for saved handle
+    if (!this.rootHandle) return false;
     try {
-      const savedHandle = await this.getSavedHandle();
-      if (savedHandle) {
-        const permission = await savedHandle.requestPermission({ mode: 'readwrite' });
-        if (permission === 'granted') {
-          this.directoryHandle = savedHandle;
-          return true;
-        }
+      const permission = await (this.rootHandle as any).requestPermission({ mode: 'readwrite' });
+      if (permission === 'granted') {
+        this.dataHandle = await this.rootHandle.getDirectoryHandle('anikchat-data', { create: true });
+        await this.ensureDirectories();
+        return true;
       }
-    } catch (error) {
-      console.log('Permission denied during reauthorization');
-    }
+    } catch { /* denied */ }
     return false;
   }
 
-  hasSavedHandle(): boolean {
-    return this.directoryHandle !== null;
-  }
-
-  async pickDirectory(): Promise<any | null> {
+  async pickDirectory(): Promise<boolean> {
     try {
       const handle = await (window as any).showDirectoryPicker({
         id: 'anikchat-storage',
         mode: 'readwrite',
         startIn: 'documents',
       });
-      
-      this.directoryHandle = handle;
-      await this.saveHandle(handle);
-      
-      // Create anikchat subdirectory
-      try {
-        await handle.getDirectoryHandle('anikchat-data', { create: true });
-      } catch (e) {
-        console.log('Subdirectory already exists or error:', e);
-      }
-      
-      return handle;
-    } catch (error) {
-      if ((error as Error).name !== 'AbortError') {
-        console.error('Error picking directory:', error);
-      }
-      return null;
+      this.rootHandle = handle;
+      this.dataHandle = await handle.getDirectoryHandle('anikchat-data', { create: true });
+      await this.ensureDirectories();
+      await this.handleStore.set('root-handle', handle);
+      return true;
+    } catch (e) {
+      if ((e as Error).name !== 'AbortError') console.error('Folder pick error:', e);
+      return false;
     }
   }
 
-  private async saveHandle(handle: any): Promise<void> {
-    // Save handle to IndexedDB for persistence
-    const idb = new IndexedDBStorage('anikchat-handles');
-    await idb.init();
-    await idb.set(this.handleKey, handle);
+  private async ensureDirectories(): Promise<void> {
+    if (!this.dataHandle) return;
+    await this.dataHandle.getDirectoryHandle('conversations', { create: true });
+    await this.dataHandle.getDirectoryHandle('media', { create: true });
+    await this.dataHandle.getDirectoryHandle('embeddings', { create: true });
+    await this.dataHandle.getDirectoryHandle('summaries', { create: true });
   }
 
-  private async getSavedHandle(): Promise<any | null> {
-    const idb = new IndexedDBStorage('anikchat-handles');
-    await idb.init();
-    return await idb.get(this.handleKey);
-  }
-
-  async clearSavedHandle(): Promise<void> {
-    const idb = new IndexedDBStorage('anikchat-handles');
-    await idb.init();
-    await idb.delete(this.handleKey);
-    this.directoryHandle = null;
+  async clearHandle(): Promise<void> {
+    await this.handleStore.delete('root-handle');
+    this.rootHandle = null;
+    this.dataHandle = null;
   }
 
   isConnected(): boolean {
-    return this.directoryHandle !== null;
+    return this.dataHandle !== null;
+  }
+
+  hasSavedHandle(): boolean {
+    return this.rootHandle !== null;
   }
 
   getDirectoryName(): string | null {
-    return this.directoryHandle?.name ?? null;
+    return this.rootHandle?.name ?? null;
   }
 
-  private async getDataDirectory(): Promise<any> {
-    if (!this.directoryHandle) throw new Error('No directory selected');
-    return await this.directoryHandle.getDirectoryHandle('anikchat-data', { create: true });
+  private async getSubDir(name: string): Promise<FileSystemDirectoryHandle> {
+    if (!this.dataHandle) throw new Error('Storage not connected');
+    return this.dataHandle.getDirectoryHandle(name, { create: true });
   }
 
-  async get<T>(key: string): Promise<T | null> {
+  // Generic JSON file operations
+  async getJSON<T>(subdir: string, filename: string): Promise<T | null> {
     try {
-      const dataDir = await this.getDataDirectory();
-      const fileHandle = await dataDir.getFileHandle(`${key}.json`);
+      const dir = await this.getSubDir(subdir);
+      const fileHandle = await dir.getFileHandle(`${filename}.json`);
       const file = await fileHandle.getFile();
-      const content = await file.text();
-      return JSON.parse(content) as T;
-    } catch (error) {
-      if ((error as Error).name === 'NotFoundError') {
-        return null;
-      }
-      throw error;
+      return JSON.parse(await file.text());
+    } catch (e) {
+      if ((e as Error).name === 'NotFoundError') return null;
+      throw e;
     }
   }
 
-  async set<T>(key: string, value: T): Promise<void> {
-    const dataDir = await this.getDataDirectory();
-    const fileHandle = await dataDir.getFileHandle(`${key}.json`, { create: true });
+  async setJSON<T>(subdir: string, filename: string, data: T): Promise<void> {
+    const dir = await this.getSubDir(subdir);
+    const fileHandle = await dir.getFileHandle(`${filename}.json`, { create: true });
     const writable = await fileHandle.createWritable();
-    await writable.write(JSON.stringify(value, null, 2));
+    await writable.write(JSON.stringify(data));
     await writable.close();
   }
 
-  async delete(key: string): Promise<void> {
+  async deleteJSON(subdir: string, filename: string): Promise<void> {
     try {
-      const dataDir = await this.getDataDirectory();
-      await dataDir.removeEntry(`${key}.json`);
-    } catch (error) {
-      if ((error as Error).name !== 'NotFoundError') {
-        throw error;
+      const dir = await this.getSubDir(subdir);
+      await dir.removeEntry(`${filename}.json`);
+    } catch { /* not found */ }
+  }
+
+  async listFiles(subdir: string): Promise<string[]> {
+    try {
+      const dir = await this.getSubDir(subdir);
+      const files: string[] = [];
+      for await (const entry of (dir as any).values()) {
+        if (entry.kind === 'file' && entry.name.endsWith('.json')) {
+          files.push(entry.name.replace('.json', ''));
+        }
       }
+      return files;
+    } catch {
+      return [];
     }
   }
 
-  async saveMedia(filename: string, data: Blob): Promise<string> {
-    const dataDir = await this.getDataDirectory();
-    const mediaDir = await dataDir.getDirectoryHandle('media', { create: true });
-    const fileHandle = await mediaDir.getFileHandle(filename, { create: true });
+  // Media operations
+  async saveMedia(filename: string, blob: Blob): Promise<string> {
+    const dir = await this.getSubDir('media');
+    const fileHandle = await dir.getFileHandle(filename, { create: true });
     const writable = await fileHandle.createWritable();
-    await writable.write(data);
+    await writable.write(blob);
     await writable.close();
-    return `media/${filename}`;
+    return filename;
   }
 
-  async getMedia(path: string): Promise<Blob | null> {
+  async getMedia(filename: string): Promise<Blob | null> {
     try {
-      const dataDir = await this.getDataDirectory();
-      const parts = path.split('/');
-      let dir: FileSystemDirectoryHandle = dataDir;
-      
-      for (let i = 0; i < parts.length - 1; i++) {
-        dir = await dir.getDirectoryHandle(parts[i]);
-      }
-      
-      const fileHandle = await dir.getFileHandle(parts[parts.length - 1]);
+      const dir = await this.getSubDir('media');
+      const fileHandle = await dir.getFileHandle(filename);
       return await fileHandle.getFile();
     } catch {
       return null;
     }
   }
 
+  async deleteMedia(filename: string): Promise<void> {
+    try {
+      const dir = await this.getSubDir('media');
+      await dir.removeEntry(filename);
+    } catch { /* not found */ }
+  }
+
   async getStorageSize(): Promise<number> {
-    if (!this.directoryHandle) return 0;
-    
-    let totalSize = 0;
-    
-    async function calculateSize(dir: any): Promise<void> {
-      for await (const entry of dir.values()) {
+    if (!this.dataHandle) return 0;
+    let total = 0;
+    const calcSize = async (dir: FileSystemDirectoryHandle) => {
+      for await (const entry of (dir as any).values()) {
         if (entry.kind === 'file') {
-          const file = await entry.getFile();
-          totalSize += file.size;
-        } else if (entry.kind === 'directory') {
-          await calculateSize(entry);
+          total += (await entry.getFile()).size;
+        } else {
+          await calcSize(entry);
         }
       }
-    }
-    
-    try {
-      const dataDir = await this.getDataDirectory();
-      await calculateSize(dataDir);
-    } catch {
-      // Directory might not exist yet
-    }
-    
-    return totalSize;
+    };
+    await calcSize(this.dataHandle);
+    return total;
   }
 }
 
-// Main Storage Service
+// Main Storage Service - Singleton
 class StorageService {
-  private config: StorageConfig;
-  private indexedDB: IndexedDBStorage;
-  private fileSystem: FileSystemStorage;
+  private type: StorageType = 'indexeddb';
+  private idb = new IndexedDBStorage();
+  private fs = new FileSystemStorage();
   private initialized = false;
-
-  constructor() {
-    this.config = {
-      type: 'localstorage',
-      dbName: 'anikchat-db',
-    };
-    this.indexedDB = new IndexedDBStorage();
-    this.fileSystem = new FileSystemStorage();
-  }
+  private initPromise: Promise<void> | null = null;
 
   async init(): Promise<void> {
     if (this.initialized) return;
+    if (this.initPromise) return this.initPromise;
 
-    // Load saved storage preference
-    const savedType = localStorage.getItem('anikchat-storage-type') as StorageType | null;
-    
-    if (savedType === 'filesystem' && isFileSystemSupported()) {
-      const connected = await this.fileSystem.init();
-      if (connected) {
-        this.config.type = 'filesystem';
-      } else if (this.fileSystem.hasSavedHandle()) {
-        // Has saved handle but needs re-auth - stay on filesystem type but mark as needing auth
-        this.config.type = 'filesystem';
+    this.initPromise = (async () => {
+      const savedType = localStorage.getItem('anikchat-storage-type') as StorageType | null;
+      
+      if (savedType === 'filesystem' && isFileSystemSupported()) {
+        const connected = await this.fs.init();
+        this.type = connected ? 'filesystem' : 'indexeddb';
+        if (!connected && this.fs.hasSavedHandle()) {
+          this.type = 'filesystem'; // Needs re-auth
+        }
       } else {
-        // Fall back to indexeddb if no saved handle
-        await this.indexedDB.init();
-        this.config.type = 'indexeddb';
+        await this.idb.init();
+        this.type = 'indexeddb';
       }
-    } else if (savedType === 'indexeddb') {
-      await this.indexedDB.init();
-      this.config.type = 'indexeddb';
-    } else {
-      // Default to localStorage for compatibility
-      this.config.type = 'localstorage';
-    }
+      this.initialized = true;
+    })();
 
-    this.initialized = true;
+    return this.initPromise;
+  }
+
+  // Check if first time (no storage configured)
+  isFirstTime(): boolean {
+    return !localStorage.getItem('anikchat-storage-type');
   }
 
   needsReauthorization(): boolean {
-    return this.config.type === 'filesystem' && !this.fileSystem.isConnected() && this.fileSystem.hasSavedHandle();
+    return this.type === 'filesystem' && !this.fs.isConnected() && this.fs.hasSavedHandle();
   }
 
-  async reauthorizeFileSystem(): Promise<boolean> {
-    const success = await this.fileSystem.reauthorize();
-    if (!success) {
-      // If re-auth fails, fall back to IndexedDB
-      await this.indexedDB.init();
-      this.config.type = 'indexeddb';
-    }
-    return success;
+  async reauthorize(): Promise<boolean> {
+    return this.fs.reauthorize();
   }
 
   getStorageType(): StorageType {
-    return this.config.type;
+    return this.type;
   }
 
   isFileSystemConnected(): boolean {
-    return this.fileSystem.isConnected();
+    return this.fs.isConnected();
   }
 
   getDirectoryName(): string | null {
-    return this.fileSystem.getDirectoryName();
+    return this.fs.getDirectoryName();
   }
 
   async switchToFileSystem(): Promise<boolean> {
     if (!isFileSystemSupported()) return false;
-    
-    const handle = await this.fileSystem.pickDirectory();
-    if (handle) {
-      // Migrate existing data
+    const success = await this.fs.pickDirectory();
+    if (success) {
       await this.migrateToFileSystem();
-      this.config.type = 'filesystem';
+      this.type = 'filesystem';
       localStorage.setItem('anikchat-storage-type', 'filesystem');
-      return true;
     }
-    return false;
+    return success;
   }
 
   async switchToIndexedDB(): Promise<void> {
-    await this.indexedDB.init();
-    this.config.type = 'indexeddb';
+    await this.idb.init();
+    this.type = 'indexeddb';
     localStorage.setItem('anikchat-storage-type', 'indexeddb');
   }
 
-  async switchToLocalStorage(): Promise<void> {
-    this.config.type = 'localstorage';
-    localStorage.setItem('anikchat-storage-type', 'localstorage');
-  }
-
   async disconnectFileSystem(): Promise<void> {
-    await this.fileSystem.clearSavedHandle();
-    await this.indexedDB.init();
-    this.config.type = 'indexeddb';
+    await this.fs.clearHandle();
+    await this.idb.init();
+    this.type = 'indexeddb';
     localStorage.setItem('anikchat-storage-type', 'indexeddb');
   }
 
   private async migrateToFileSystem(): Promise<void> {
-    // Migrate from localStorage
-    const keys = ['openchat-config', 'openchat-conversations'];
-    
-    for (const key of keys) {
-      const localValue = localStorage.getItem(key);
-      if (localValue) {
-        try {
-          const parsed = JSON.parse(localValue);
-          await this.fileSystem.set(key, parsed);
-        } catch {
-          // Skip invalid JSON
+    // Migrate conversations from localStorage
+    const convData = localStorage.getItem('openchat-conversations');
+    if (convData) {
+      try {
+        const convs = JSON.parse(convData);
+        for (const conv of convs) {
+          await this.fs.setJSON('conversations', conv.id, conv);
         }
-      }
+      } catch { /* skip */ }
     }
-    
-    // Migrate from IndexedDB if any
+
+    // Migrate config
+    const configData = localStorage.getItem('openchat-config');
+    if (configData) {
+      try {
+        await this.fs.setJSON('', 'config', JSON.parse(configData));
+      } catch { /* skip */ }
+    }
+
+    // Migrate from IndexedDB
     try {
-      const idbKeys = await this.indexedDB.getAllKeys();
-      for (const key of idbKeys) {
-        const value = await this.indexedDB.get(key);
-        if (value) {
-          await this.fileSystem.set(key as string, value);
+      const keys = await this.idb.getAllKeys();
+      for (const key of keys) {
+        const value = await this.idb.get(key);
+        if (key.startsWith('conv-')) {
+          await this.fs.setJSON('conversations', key.replace('conv-', ''), value);
+        } else if (key.startsWith('emb-')) {
+          await this.fs.setJSON('embeddings', key.replace('emb-', ''), value);
+        } else if (key.startsWith('summary-')) {
+          await this.fs.setJSON('summaries', key.replace('summary-', ''), value);
         }
       }
-    } catch {
-      // IndexedDB might not be initialized
+    } catch { /* skip */ }
+  }
+
+  // Conversation operations
+  async getConversation<T>(id: string): Promise<T | null> {
+    await this.init();
+    if (this.type === 'filesystem') {
+      return this.fs.getJSON('conversations', id);
+    }
+    return this.idb.get(`conv-${id}`);
+  }
+
+  async saveConversation<T>(id: string, data: T): Promise<void> {
+    await this.init();
+    if (this.type === 'filesystem') {
+      await this.fs.setJSON('conversations', id, data);
+    } else {
+      await this.idb.set(`conv-${id}`, data);
     }
   }
 
-  async get<T>(key: string): Promise<T | null> {
+  async deleteConversation(id: string): Promise<void> {
     await this.init();
-    
-    switch (this.config.type) {
-      case 'filesystem':
-        return await this.fileSystem.get<T>(key);
-      case 'indexeddb':
-        return await this.indexedDB.get<T>(key);
-      case 'localstorage':
-      default:
-        const item = localStorage.getItem(key);
-        return item ? JSON.parse(item) : null;
+    if (this.type === 'filesystem') {
+      await this.fs.deleteJSON('conversations', id);
+    } else {
+      await this.idb.delete(`conv-${id}`);
     }
   }
 
-  async set<T>(key: string, value: T): Promise<void> {
+  async listConversations(): Promise<string[]> {
     await this.init();
-    
-    switch (this.config.type) {
-      case 'filesystem':
-        await this.fileSystem.set(key, value);
-        break;
-      case 'indexeddb':
-        await this.indexedDB.set(key, value);
-        break;
-      case 'localstorage':
-      default:
-        localStorage.setItem(key, JSON.stringify(value));
+    if (this.type === 'filesystem') {
+      return this.fs.listFiles('conversations');
+    }
+    const keys = await this.idb.getAllKeys();
+    return keys.filter(k => k.startsWith('conv-')).map(k => k.replace('conv-', ''));
+  }
+
+  // Embedding operations
+  async getEmbedding<T>(id: string): Promise<T | null> {
+    await this.init();
+    if (this.type === 'filesystem') {
+      return this.fs.getJSON('embeddings', id);
+    }
+    return this.idb.get(`emb-${id}`);
+  }
+
+  async saveEmbedding<T>(id: string, data: T): Promise<void> {
+    await this.init();
+    if (this.type === 'filesystem') {
+      await this.fs.setJSON('embeddings', id, data);
+    } else {
+      await this.idb.set(`emb-${id}`, data);
     }
   }
 
-  async delete(key: string): Promise<void> {
+  async deleteEmbedding(id: string): Promise<void> {
     await this.init();
-    
-    switch (this.config.type) {
-      case 'filesystem':
-        await this.fileSystem.delete(key);
-        break;
-      case 'indexeddb':
-        await this.indexedDB.delete(key);
-        break;
-      case 'localstorage':
-      default:
-        localStorage.removeItem(key);
+    if (this.type === 'filesystem') {
+      await this.fs.deleteJSON('embeddings', id);
+    } else {
+      await this.idb.delete(`emb-${id}`);
     }
   }
 
-  async saveMedia(filename: string, data: Blob): Promise<string> {
+  async listEmbeddings(): Promise<string[]> {
     await this.init();
-    
-    if (this.config.type === 'filesystem') {
-      return await this.fileSystem.saveMedia(filename, data);
+    if (this.type === 'filesystem') {
+      return this.fs.listFiles('embeddings');
     }
-    
-    // For IndexedDB/localStorage, convert to base64
+    const keys = await this.idb.getAllKeys();
+    return keys.filter(k => k.startsWith('emb-')).map(k => k.replace('emb-', ''));
+  }
+
+  // Summary operations
+  async getSummary<T>(convId: string): Promise<T | null> {
+    await this.init();
+    if (this.type === 'filesystem') {
+      return this.fs.getJSON('summaries', convId);
+    }
+    return this.idb.get(`summary-${convId}`);
+  }
+
+  async saveSummary<T>(convId: string, data: T): Promise<void> {
+    await this.init();
+    if (this.type === 'filesystem') {
+      await this.fs.setJSON('summaries', convId, data);
+    } else {
+      await this.idb.set(`summary-${convId}`, data);
+    }
+  }
+
+  // Media operations
+  async saveMedia(filename: string, blob: Blob): Promise<string> {
+    await this.init();
+    if (this.type === 'filesystem') {
+      return this.fs.saveMedia(filename, blob);
+    }
+    // IndexedDB: store as base64
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onloadend = async () => {
-        const base64 = reader.result as string;
-        await this.set(`media-${filename}`, base64);
-        resolve(`media-${filename}`);
+        await this.idb.set(`media-${filename}`, reader.result);
+        resolve(filename);
       };
       reader.onerror = reject;
-      reader.readAsDataURL(data);
+      reader.readAsDataURL(blob);
     });
+  }
+
+  async getMedia(filename: string): Promise<Blob | null> {
+    await this.init();
+    if (this.type === 'filesystem') {
+      return this.fs.getMedia(filename);
+    }
+    const data = await this.idb.get<string>(`media-${filename}`);
+    if (!data) return null;
+    const res = await fetch(data);
+    return res.blob();
+  }
+
+  // Config operations
+  async getConfig<T>(): Promise<T | null> {
+    await this.init();
+    if (this.type === 'filesystem') {
+      return this.fs.getJSON('', 'config');
+    }
+    return this.idb.get('config');
+  }
+
+  async saveConfig<T>(data: T): Promise<void> {
+    await this.init();
+    if (this.type === 'filesystem') {
+      await this.fs.setJSON('', 'config', data);
+    } else {
+      await this.idb.set('config', data);
+    }
   }
 
   async getStorageSize(): Promise<number> {
     await this.init();
-    
-    switch (this.config.type) {
-      case 'filesystem':
-        return await this.fileSystem.getStorageSize();
-      case 'indexeddb':
-        return await this.indexedDB.getStorageSize();
-      case 'localstorage':
-      default:
-        let total = 0;
-        for (let i = 0; i < localStorage.length; i++) {
-          const key = localStorage.key(i);
-          if (key?.startsWith('openchat-') || key?.startsWith('anikchat-')) {
-            const value = localStorage.getItem(key) || '';
-            total += new Blob([value]).size;
-          }
-        }
-        return total;
+    if (this.type === 'filesystem') {
+      return this.fs.getStorageSize();
     }
+    return this.idb.getStorageSize();
   }
 
   async clearAll(): Promise<void> {
     await this.init();
-    
-    switch (this.config.type) {
-      case 'filesystem':
-        // Clear file system data
-        await this.fileSystem.delete('openchat-config');
-        await this.fileSystem.delete('openchat-conversations');
-        break;
-      case 'indexeddb':
-        await this.indexedDB.clear();
-        break;
-      case 'localstorage':
-      default:
-        const keysToRemove: string[] = [];
-        for (let i = 0; i < localStorage.length; i++) {
-          const key = localStorage.key(i);
-          if (key?.startsWith('openchat-') || key?.startsWith('anikchat-')) {
-            keysToRemove.push(key);
-          }
-        }
-        keysToRemove.forEach(key => localStorage.removeItem(key));
+    if (this.type === 'filesystem') {
+      const convs = await this.fs.listFiles('conversations');
+      for (const c of convs) await this.fs.deleteJSON('conversations', c);
+      const embs = await this.fs.listFiles('embeddings');
+      for (const e of embs) await this.fs.deleteJSON('embeddings', e);
+      const sums = await this.fs.listFiles('summaries');
+      for (const s of sums) await this.fs.deleteJSON('summaries', s);
+    } else {
+      await this.idb.clear();
     }
   }
 }
 
-// Singleton instance
+// Singleton
 export const storageService = new StorageService();
-
-// React hook for storage info
-export function getStorageInfo(): { type: StorageType; isFileSystemSupported: boolean } {
-  return {
-    type: storageService.getStorageType(),
-    isFileSystemSupported: isFileSystemSupported(),
-  };
-}

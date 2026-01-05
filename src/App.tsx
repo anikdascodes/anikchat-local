@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner, toast } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -7,6 +7,8 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { ThemeProvider } from "@/hooks/useTheme";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useRegisterSW } from 'virtual:pwa-register/react';
+import { storageService } from "@/lib/storageService";
+import { StorageSetup } from "@/components/StorageSetup";
 import Index from "./pages/Index";
 
 // Lazy load Settings page for faster initial load
@@ -16,6 +18,10 @@ const NotFound = lazy(() => import("./pages/NotFound"));
 const queryClient = new QueryClient();
 
 const App = () => {
+  const [showStorageSetup, setShowStorageSetup] = useState(false);
+  const [needsReauth, setNeedsReauth] = useState(false);
+  const [isReady, setIsReady] = useState(false);
+
   const {
     needRefresh: [needRefresh],
     updateServiceWorker,
@@ -27,6 +33,43 @@ const App = () => {
       console.log('SW registration error', error);
     },
   });
+
+  // Initialize storage on app load
+  useEffect(() => {
+    const initStorage = async () => {
+      await storageService.init();
+      
+      if (storageService.isFirstTime()) {
+        setShowStorageSetup(true);
+      } else if (storageService.needsReauthorization()) {
+        setNeedsReauth(true);
+      }
+      setIsReady(true);
+    };
+    initStorage();
+  }, []);
+
+  // Handle re-authorization for file system
+  useEffect(() => {
+    if (needsReauth) {
+      toast.info("Storage access needed", {
+        description: "Click to reconnect to your storage folder",
+        action: {
+          label: "Reconnect",
+          onClick: async () => {
+            const success = await storageService.reauthorize();
+            if (success) {
+              setNeedsReauth(false);
+              toast.success("Storage reconnected");
+            } else {
+              toast.error("Could not reconnect. Using browser storage.");
+            }
+          },
+        },
+        duration: 60000,
+      });
+    }
+  }, [needsReauth]);
 
   useEffect(() => {
     if (needRefresh) {
@@ -43,12 +86,31 @@ const App = () => {
 
   // Preload embedding model for unlimited context (async, non-blocking)
   useEffect(() => {
+    if (!isReady || showStorageSetup) return;
     import('@/lib/memoryManager').then(({ preloadEmbeddingModel }) => {
       preloadEmbeddingModel().then(loaded => {
         if (loaded) console.log('Embedding model loaded for unlimited context');
       });
     }).catch(() => {});
-  }, []);
+  }, [isReady, showStorageSetup]);
+
+  // Show loading while initializing
+  if (!isReady) {
+    return (
+      <div className="h-screen flex items-center justify-center bg-background">
+        <div className="animate-pulse text-muted-foreground">Loading...</div>
+      </div>
+    );
+  }
+
+  // Show storage setup on first launch
+  if (showStorageSetup) {
+    return (
+      <ThemeProvider>
+        <StorageSetup onComplete={() => setShowStorageSetup(false)} isFirstTime />
+      </ThemeProvider>
+    );
+  }
 
   return (
     <ErrorBoundary>
