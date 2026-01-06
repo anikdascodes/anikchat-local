@@ -99,22 +99,46 @@ export function useConversations(): UseConversationsReturn {
     }
   }, [activeConversationId]);
 
-  // Save conversations with debounce
+  // Track pending saves for flush on unmount
+  const pendingConvsRef = useRef<Conversation[] | null>(null);
+
+  // Save conversations - immediate for localStorage, debounced for file system
   const saveConversations = useCallback(async (convs: Conversation[]) => {
-    // Also save to localStorage as backup
+    // Immediate localStorage backup (fast, prevents data loss)
     localStorage.setItem('openchat-conversations', JSON.stringify(convs));
     
-    // Save each conversation to storage
+    // Save to file system storage
     for (const conv of convs) {
       await storageService.saveConversation(conv.id, conv);
     }
+    pendingConvsRef.current = null;
+  }, []);
+
+  // Flush pending saves on unmount
+  useEffect(() => {
+    return () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+      // Immediate save if there are pending changes
+      if (pendingConvsRef.current) {
+        localStorage.setItem('openchat-conversations', JSON.stringify(pendingConvsRef.current));
+        // Note: Can't await in cleanup, but localStorage is sync
+      }
+    };
   }, []);
 
   const setConversations = useCallback((value: Conversation[] | ((prev: Conversation[]) => Conversation[])) => {
     setConversationsState(prev => {
       const newConvs = typeof value === 'function' ? value(prev) : value;
       
-      // Debounced save
+      // Track pending for flush
+      pendingConvsRef.current = newConvs;
+      
+      // Immediate localStorage backup
+      localStorage.setItem('openchat-conversations', JSON.stringify(newConvs));
+      
+      // Debounced file system save
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
       saveTimeoutRef.current = setTimeout(() => saveConversations(newConvs), 500);
       

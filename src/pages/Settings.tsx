@@ -1,10 +1,11 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Palette, Key, MessageSquare, Sliders, Database, Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { APIConfig, Conversation, defaultConfig } from '@/types/chat';
-import { useLocalStorage } from '@/hooks/useLocalStorage';
+import { useConfig } from '@/hooks/useConfig';
+import { storageService } from '@/lib/storageService';
 import { toast } from 'sonner';
 import {
   AppearanceSettings,
@@ -16,9 +17,30 @@ import {
 
 function Settings() {
   const navigate = useNavigate();
-  const [config, setConfig] = useLocalStorage<APIConfig>('openchat-config', defaultConfig);
-  const [conversations, setConversations] = useLocalStorage<Conversation[]>('openchat-conversations', []);
+  const [config, setConfig] = useConfig<APIConfig>(defaultConfig);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
   const [saved, setSaved] = useState(false);
+
+  // Load conversations from storageService
+  useEffect(() => {
+    const loadConversations = async () => {
+      try {
+        const ids = await storageService.listConversations();
+        const convs: Conversation[] = [];
+        for (const id of ids) {
+          const conv = await storageService.getConversation<Conversation>(id);
+          if (conv) convs.push(conv);
+        }
+        convs.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+        setConversations(convs);
+      } catch {
+        // Fallback to localStorage
+        const local = localStorage.getItem('openchat-conversations');
+        if (local) setConversations(JSON.parse(local));
+      }
+    };
+    loadConversations();
+  }, []);
 
   const handleConfigChange = useCallback((newConfig: APIConfig) => {
     setConfig(newConfig);
@@ -46,22 +68,27 @@ function Settings() {
     toast.success('Data exported successfully');
   }, [config, conversations]);
 
-  const handleDeleteConversation = useCallback((id: string) => {
+  const handleDeleteConversation = useCallback(async (id: string) => {
     if (window.confirm('Delete this conversation?')) {
+      await storageService.deleteConversation(id);
       setConversations((prev) => prev.filter((c) => c.id !== id));
       toast.success('Conversation deleted');
     }
-  }, [setConversations]);
+  }, []);
 
-  const handleClearConversations = useCallback(() => {
+  const handleClearConversations = useCallback(async () => {
     if (window.confirm('Delete all conversations? This cannot be undone.')) {
+      for (const conv of conversations) {
+        await storageService.deleteConversation(conv.id);
+      }
       setConversations([]);
       toast.success('All conversations deleted');
     }
-  }, [setConversations]);
+  }, [conversations]);
 
-  const handleClearAllData = useCallback(() => {
+  const handleClearAllData = useCallback(async () => {
     if (window.confirm('⚠️ Delete ALL data? This cannot be undone!')) {
+      await storageService.clearAll();
       localStorage.removeItem('openchat-config');
       localStorage.removeItem('openchat-conversations');
       toast.success('All data cleared');
@@ -69,7 +96,7 @@ function Settings() {
     }
   }, []);
 
-  const handleImportData = useCallback((data: { config?: APIConfig; conversations?: Conversation[] }) => {
+  const handleImportData = useCallback(async (data: { config?: APIConfig; conversations?: Conversation[] }) => {
     if (data.config) {
       // Merge config - keep existing providers, add new ones
       setConfig(prev => ({
@@ -86,13 +113,17 @@ function Settings() {
     
     if (data.conversations) {
       // Merge conversations - add new ones, skip duplicates
-      setConversations(prev => {
-        const existingIds = new Set(prev.map(c => c.id));
-        const newConvs = data.conversations!.filter(c => !existingIds.has(c.id));
-        return [...newConvs, ...prev];
-      });
+      const existingIds = new Set(conversations.map(c => c.id));
+      const newConvs = data.conversations.filter(c => !existingIds.has(c.id));
+      
+      // Save new conversations to storage
+      for (const conv of newConvs) {
+        await storageService.saveConversation(conv.id, conv);
+      }
+      
+      setConversations(prev => [...newConvs, ...prev]);
     }
-  }, [setConfig, setConversations]);
+  }, [setConfig, conversations]);
 
   return (
     <div className="min-h-screen bg-background">

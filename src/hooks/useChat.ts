@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -10,6 +10,7 @@ import {
   hasActiveModel
 } from '@/types/chat';
 import { streamChat, summarizeMessages } from '@/lib/api';
+import { processMessageImages } from '@/lib/imageStorage';
 
 interface UseChatOptions {
   config: APIConfig;
@@ -38,6 +39,22 @@ export function useChat({
   const navigate = useNavigate();
   const [isLoading, setIsLoading] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
+  
+  // Ref to always have latest conversations (fixes stale closure)
+  const conversationsRef = useRef(conversations);
+  useEffect(() => {
+    conversationsRef.current = conversations;
+  }, [conversations]);
+
+  // Cleanup on unmount - abort any pending requests
+  useEffect(() => {
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+        abortControllerRef.current = null;
+      }
+    };
+  }, []);
 
   const activeConversation = conversations.find((c) => c.id === activeConversationId);
 
@@ -76,11 +93,17 @@ export function useChat({
         conv = newConv;
       }
 
+      // Store images separately and get references
+      let imageRefs: string[] | undefined;
+      if (images && images.length > 0) {
+        imageRefs = await processMessageImages(images);
+      }
+
       const userMessage: Message = {
         id: generateId(),
         role: 'user',
         content,
-        images,
+        images: imageRefs, // Store refs, not full base64
         timestamp: new Date(),
       };
 
@@ -141,8 +164,8 @@ export function useChat({
         onError: (error) => {
           console.error('Chat error:', error);
 
-          // Get the last user message for retry functionality
-          const currentMessages = conversations.find(c => c.id === conversationId)?.messages || [];
+          // Get the last user message for retry functionality (use ref for latest data)
+          const currentMessages = conversationsRef.current.find(c => c.id === conversationId)?.messages || [];
           let lastUserMessage: Message | null = null;
           for (let i = currentMessages.length - 1; i >= 0; i--) {
             if (currentMessages[i].role === 'user') {
@@ -183,9 +206,9 @@ export function useChat({
           setIsLoading(false);
           abortControllerRef.current = null;
 
-          // Store assistant response in memory
+          // Store assistant response in memory (use ref for latest data)
           if (conversationId) {
-            const currentConv = conversations.find(c => c.id === conversationId);
+            const currentConv = conversationsRef.current.find(c => c.id === conversationId);
             const lastMsg = currentConv?.messages[currentConv.messages.length - 1];
             if (lastMsg && lastMsg.role === 'assistant' && lastMsg.content) {
               import('@/lib/memoryManager').then(({ storeMessage }) => {

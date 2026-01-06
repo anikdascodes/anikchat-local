@@ -2,6 +2,7 @@ import { APIConfig, Message, getActiveProviderAndModel } from '@/types/chat';
 import { prepareContext, prepareContextWithMemory, createSummarizationPrompt } from './contextManager';
 import { getImageFormatConfig, getProviderKey, detectProviderType } from './providerUtils';
 import { storeMessage, saveConversationSummary } from './memoryManager';
+import { loadImage, isImageRef } from './imageStorage';
 
 // Different message formats for different providers
 type OpenAIImageContent = { type: 'image_url'; image_url: { url: string; detail?: string } };
@@ -142,6 +143,15 @@ export async function streamChat(options: StreamOptions): Promise<void> {
     return { mimeType: 'image/jpeg', base64: dataUrl };
   };
 
+  // Helper to load image (handles refs and data URLs)
+  const loadImageData = async (img: string): Promise<string> => {
+    if (isImageRef(img)) {
+      const loaded = await loadImage(img);
+      return loaded || '';
+    }
+    return img;
+  };
+
   for (const msg of contextResult.messages) {
     const originalMsg = messages.find((m) => m.content === msg.content);
     const hasImages = originalMsg?.images && originalMsg.images.length > 0;
@@ -151,10 +161,17 @@ export async function streamChat(options: StreamOptions): Promise<void> {
         console.warn(`Model "${model.modelId}" is not marked as vision-capable, but images were attached.`);
       }
 
+      // Load images (may be refs or data URLs)
+      const loadedImages: string[] = [];
+      for (const img of originalMsg.images!) {
+        const loaded = await loadImageData(img);
+        if (loaded) loadedImages.push(loaded);
+      }
+
       // Format images based on provider
       if (providerKey === 'ollama') {
         // Ollama: separate images array with raw base64 (no prefix)
-        const base64Images = originalMsg.images!.map(img => parseDataUrl(img).base64);
+        const base64Images = loadedImages.map(img => parseDataUrl(img).base64);
         apiMessages.push({
           role: msg.role,
           content: msg.content,
@@ -165,7 +182,7 @@ export async function streamChat(options: StreamOptions): Promise<void> {
         const contentParts: (AnthropicTextContent | AnthropicImageContent)[] = [
           { type: 'text', text: msg.content },
         ];
-        for (const img of originalMsg.images!) {
+        for (const img of loadedImages) {
           const { mimeType, base64 } = parseDataUrl(img);
           contentParts.push({
             type: 'image',
@@ -185,7 +202,7 @@ export async function streamChat(options: StreamOptions): Promise<void> {
         const contentParts: (OpenAITextContent | OpenAIImageContent)[] = [
           { type: 'text', text: msg.content },
         ];
-        for (const img of originalMsg.images!) {
+        for (const img of loadedImages) {
           // OpenAI expects full data URL
           const imageUrl = img.startsWith('data:') ? img : `data:image/jpeg;base64,${img}`;
           contentParts.push({

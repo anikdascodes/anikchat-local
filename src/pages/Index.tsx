@@ -5,6 +5,7 @@ import { ConversationSidebar } from '@/components/ConversationSidebar';
 import { ChatMessage } from '@/components/ChatMessage';
 import { ChatInput, ChatInputRef } from '@/components/ChatInput';
 import { TypingIndicator } from '@/components/TypingIndicator';
+import { VirtualizedMessageList } from '@/components/VirtualizedMessageList';
 import { EmptyState } from '@/components/EmptyState';
 import { ModelSelector } from '@/components/ModelSelector';
 import { ConversationSearch } from '@/components/ConversationSearch';
@@ -14,6 +15,7 @@ import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { useConversations } from '@/hooks/useConversations';
 import { useChat } from '@/hooks/useChat';
 import { useFolders } from '@/hooks/useFolders';
+import { useConfig } from '@/hooks/useConfig';
 import { APIConfig, defaultConfig, hasActiveModel, getActiveProviderAndModel } from '@/types/chat';
 import { toast } from 'sonner';
 import {
@@ -23,9 +25,12 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 
+// Use virtualization for conversations with many messages
+const VIRTUALIZATION_THRESHOLD = 50;
+
 export default function Index() {
   const navigate = useNavigate();
-  const [config, setConfig] = useLocalStorage<APIConfig>('openchat-config', defaultConfig);
+  const [config, setConfig] = useConfig<APIConfig>(defaultConfig);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useLocalStorage('openchat-sidebar-collapsed', false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -243,32 +248,42 @@ export default function Index() {
         {/* Chat Content */}
         {activeConversation && activeConversation.messages.length > 0 ? (
           <>
-            <div ref={scrollRef} className="flex-1 overflow-y-auto scrollbar-thin">
-              {activeConversation.messages.map((msg, idx) => {
-                const isLastMessage = idx === activeConversation.messages.length - 1;
-                const isLastAssistant = isLastMessage && msg.role === 'assistant';
-                // Show retry on user message if it's the last message (meaning assistant response failed)
-                const isLastUserWithNoResponse = isLastMessage && msg.role === 'user';
-                if (isLoading && isLastMessage && msg.role === 'assistant' && msg.content === '') {
-                  return null;
-                }
-                return (
-                  <div key={msg.id} id={`message-${msg.id}`}>
-                    <ChatMessage
-                      message={msg}
-                      isLast={(isLastAssistant || isLastUserWithNoResponse) && !isLoading}
-                      onRegenerate={(isLastAssistant || isLastUserWithNoResponse) && !isLoading ? handleRegenerate : undefined}
-                      onEdit={msg.role === 'user' && !isLoading ? handleEditMessage : undefined}
-                      messageIndex={idx}
-                    />
-                  </div>
-                );
-              })}
-              {isLoading &&
-                activeConversation.messages[activeConversation.messages.length - 1]?.content === '' && (
-                  <TypingIndicator />
-                )}
-            </div>
+            {activeConversation.messages.length >= VIRTUALIZATION_THRESHOLD ? (
+              /* Virtualized list for long conversations */
+              <VirtualizedMessageList
+                messages={activeConversation.messages}
+                isLoading={isLoading}
+                onRegenerate={handleRegenerate}
+                onEditMessage={handleEditMessage}
+              />
+            ) : (
+              /* Regular list for short conversations */
+              <div ref={scrollRef} className="flex-1 overflow-y-auto scrollbar-thin">
+                {activeConversation.messages.map((msg, idx) => {
+                  const isLastMessage = idx === activeConversation.messages.length - 1;
+                  const isLastAssistant = isLastMessage && msg.role === 'assistant';
+                  const isLastUserWithNoResponse = isLastMessage && msg.role === 'user';
+                  if (isLoading && isLastMessage && msg.role === 'assistant' && msg.content === '') {
+                    return null;
+                  }
+                  return (
+                    <div key={msg.id} id={`message-${msg.id}`}>
+                      <ChatMessage
+                        message={msg}
+                        isLast={(isLastAssistant || isLastUserWithNoResponse) && !isLoading}
+                        onRegenerate={(isLastAssistant || isLastUserWithNoResponse) && !isLoading ? handleRegenerate : undefined}
+                        onEdit={msg.role === 'user' && !isLoading ? handleEditMessage : undefined}
+                        messageIndex={idx}
+                      />
+                    </div>
+                  );
+                })}
+                {isLoading &&
+                  activeConversation.messages[activeConversation.messages.length - 1]?.content === '' && (
+                    <TypingIndicator />
+                  )}
+              </div>
+            )}
             <ChatInput
               ref={inputRef}
               onSend={handleSend}

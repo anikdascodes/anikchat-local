@@ -66,21 +66,21 @@ describe('providerUtils', () => {
     });
 
     describe('getImageFormatConfig', () => {
-        it('returns Ollama config without image_url format', () => {
+        it('returns Ollama config with ollama format', () => {
             const config = getImageFormatConfig('http://localhost:11434/v1');
-            expect(config.useImageUrlFormat).toBe(false);
+            expect(config.format).toBe('ollama');
             expect(config.supportsUrlImages).toBe(false);
         });
 
         it('returns SambaNova config without detail param', () => {
             const config = getImageFormatConfig('https://api.sambanova.ai/v1');
-            expect(config.useImageUrlFormat).toBe(true);
+            expect(config.format).toBe('openai');
             expect(config.supportsDetailParam).toBe(false);
         });
 
         it('returns OpenAI config with detail param', () => {
             const config = getImageFormatConfig('https://api.openai.com/v1');
-            expect(config.useImageUrlFormat).toBe(true);
+            expect(config.format).toBe('openai');
             expect(config.supportsDetailParam).toBe(true);
         });
     });
