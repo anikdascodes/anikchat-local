@@ -100,12 +100,42 @@ export default function Index() {
     }
   }, [baseHandleSelectConversation]);
 
-  // Auto-scroll to bottom on new messages
+  // Auto-scroll to bottom on new messages and during streaming
   useEffect(() => {
     if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      scrollRef.current.scrollTo({
+        top: scrollRef.current.scrollHeight,
+        behavior: 'smooth'
+      });
     }
-  }, [activeConversation?.messages]);
+  }, [activeConversation?.messages, streamingContent]);
+
+  // Scroll to bottom when switching conversations
+  useEffect(() => {
+    if (activeConversationId && scrollRef.current) {
+      // Small delay to ensure content has rendered
+      setTimeout(() => {
+        if (scrollRef.current) {
+          scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+        }
+      }, 50);
+    }
+  }, [activeConversationId]);
+
+  // Scroll to bottom when streaming completes (isLoading becomes false)
+  useEffect(() => {
+    if (!isLoading && scrollRef.current) {
+      // Small delay to ensure final content has rendered
+      setTimeout(() => {
+        if (scrollRef.current) {
+          scrollRef.current.scrollTo({
+            top: scrollRef.current.scrollHeight,
+            behavior: 'smooth'
+          });
+        }
+      }, 100);
+    }
+  }, [isLoading]);
 
   // Keyboard shortcuts
   useKeyboardShortcuts([
@@ -258,6 +288,7 @@ export default function Index() {
               <VirtualizedMessageList
                 messages={activeConversation.messages}
                 isLoading={isLoading}
+                streamingContent={streamingContent}
                 onRegenerate={handleRegenerate}
                 onEditMessage={handleEditMessage}
               />
@@ -268,6 +299,7 @@ export default function Index() {
                   const isLastMessage = idx === activeConversation.messages.length - 1;
                   const isLastAssistant = isLastMessage && msg.role === 'assistant';
                   const isLastUserWithNoResponse = isLastMessage && msg.role === 'user';
+                  // Skip empty assistant message during streaming - we show StreamingMessage instead
                   if (isLoading && isLastMessage && msg.role === 'assistant' && msg.content === '') {
                     return null;
                   }
@@ -284,16 +316,16 @@ export default function Index() {
                     </div>
                   );
                 })}
-                {isLoading &&
+                {/* Show streaming message inside the scroll container */}
+                {isLoading && streamingContent && (
+                  <StreamingMessage content={streamingContent} />
+                )}
+                {/* Show typing indicator when waiting for first chunk */}
+                {isLoading && !streamingContent &&
                   activeConversation.messages[activeConversation.messages.length - 1]?.content === '' && (
                     <TypingIndicator />
                   )}
               </div>
-            )}
-
-            {/* Streaming message - rendered separately for performance */}
-            {isLoading && streamingContent && (
-              <StreamingMessage content={streamingContent} />
             )}
 
             <ChatInput

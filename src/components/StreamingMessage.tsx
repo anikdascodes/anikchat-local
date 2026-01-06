@@ -1,13 +1,14 @@
 import { memo } from 'react';
+import { MarkdownRenderer } from './MarkdownRenderer';
 
 interface StreamingMessageProps {
     content: string;
 }
 
 /**
- * Lightweight component for actively streaming content.
- * Uses plain text rendering instead of markdown for better performance during streaming.
- * The full markdown parsing happens only after streaming completes.
+ * Component for actively streaming content.
+ * Uses markdown rendering for consistent appearance during and after streaming.
+ * The 50ms buffer in useChat already limits re-renders for performance.
  */
 export const StreamingMessage = memo(function StreamingMessage({
     content
@@ -28,9 +29,9 @@ export const StreamingMessage = memo(function StreamingMessage({
                             <span className="text-xs text-muted-foreground animate-pulse">generating...</span>
                         </div>
 
-                        {/* Content - plain text during streaming for performance */}
-                        <div className="text-sm leading-relaxed whitespace-pre-wrap break-words">
-                            {content}
+                        {/* Content - markdown rendered for consistent appearance */}
+                        <div className="text-sm leading-relaxed overflow-x-auto">
+                            <MarkdownRenderer content={content} />
                             <span className="inline-block w-2 h-4 bg-primary/60 animate-pulse ml-0.5 align-middle" />
                         </div>
                     </div>
@@ -39,3 +40,4 @@ export const StreamingMessage = memo(function StreamingMessage({
         </div>
     );
 });
+

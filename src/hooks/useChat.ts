@@ -294,7 +294,10 @@ export function useChat({
             })
           );
 
-          // Clear streaming state
+          // Delay clearing streaming state to ensure conversation update renders first
+          // This prevents the flash where streaming content disappears before the final message appears
+          await new Promise(resolve => setTimeout(resolve, 50));
+
           setStreamingContent('');
           setStreamingMessageId(null);
           streamingBufferRef.current = '';
@@ -331,17 +334,24 @@ export function useChat({
                 });
               }
 
-              setConversations((prev) =>
-                prev.map((c) => {
+              // Use ref to get the latest conversations state (avoids race condition)
+              setConversations((prev) => {
+                // Find the current conversation with latest data
+                const currentConv = prev.find(c => c.id === conversationId);
+                if (!currentConv) return prev;
+
+                return prev.map((c) => {
                   if (c.id !== conversationId) return c;
                   return {
                     ...c,
+                    // Preserve all existing data including messages
+                    messages: c.messages,
                     summary,
                     summarizedUpTo: c.messages.length - 5,
                     updatedAt: new Date(),
                   };
-                })
-              );
+                });
+              });
 
               toast.success('Context optimized', { duration: 2000 });
             } catch (error) {

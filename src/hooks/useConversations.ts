@@ -42,14 +42,8 @@ export function useConversations(): UseConversationsReturn {
           convs.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
           setConversationsState(convs);
 
-          // Restore active conversation immediately after loading
-          const savedActiveId = localStorage.getItem('openchat-active-conversation');
-          if (savedActiveId && convs.find(c => c.id === savedActiveId)) {
-            setActiveConversationId(savedActiveId);
-          } else if (convs.length > 0) {
-            // Default to most recent conversation, NOT new chat
-            setActiveConversationId(convs[0].id);
-          }
+          // Start with empty chat view - let user choose from history
+          // (activeConversationId stays null)
           hasRestoredActive.current = true;
         } else {
           // Fallback: try localStorage for migration
@@ -64,13 +58,8 @@ export function useConversations(): UseConversationsReturn {
               await storageService.saveConversation(conv.id, conv);
             }
 
-            // Restore active
-            const savedActiveId = localStorage.getItem('openchat-active-conversation');
-            if (savedActiveId && convs.find(c => c.id === savedActiveId)) {
-              setActiveConversationId(savedActiveId);
-            } else if (convs.length > 0) {
-              setActiveConversationId(convs[0].id);
-            }
+            // Start with empty chat view - let user choose from history
+            // (activeConversationId stays null)
             hasRestoredActive.current = true;
           }
         }
@@ -81,9 +70,7 @@ export function useConversations(): UseConversationsReturn {
         if (localData) {
           const convs = JSON.parse(localData) as Conversation[];
           setConversationsState(convs);
-          if (convs.length > 0) {
-            setActiveConversationId(convs[0].id);
-          }
+          // Start with empty chat view
           hasRestoredActive.current = true;
         }
       }
