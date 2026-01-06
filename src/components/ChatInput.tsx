@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, forwardRef, useImperativeHandle, useEffect } from 'react';
 import { ArrowUp, ImagePlus, X, Square } from 'lucide-react';
+import { sanitizeInput } from '@/lib/sanitize';
 
 interface ChatInputProps {
   onSend: (message: string, images?: string[]) => void;
@@ -39,8 +40,9 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(function ChatI
 
   const handleSubmit = useCallback(() => {
     if (isLoading) return;
-    if (!input.trim() && images.length === 0) return;
-    onSend(input.trim(), images.length > 0 ? images : undefined);
+    const sanitized = sanitizeInput(input);
+    if (!sanitized && images.length === 0) return;
+    onSend(sanitized, images.length > 0 ? images : undefined);
     setInput('');
     setImages([]);
     setTimeout(() => textareaRef.current?.focus(), 0);

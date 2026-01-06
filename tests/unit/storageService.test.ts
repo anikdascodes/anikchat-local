@@ -161,9 +161,18 @@ describe('storageService', () => {
 
     it('returns null when no config exists', async () => {
       const service = await createStorageService();
-      await service.clearAll(); // Ensure clean state
+      await service.clearConfig(); // Use clearConfig, not clearAll (config is separate)
       const result = await service.getConfig();
       expect(result).toBeNull();
+    });
+
+    it('clearAll does not clear config', async () => {
+      const service = await createStorageService();
+      const config = { theme: 'dark', apiKey: 'test-key' };
+      await service.saveConfig(config);
+      await service.clearAll();
+      const result = await service.getConfig();
+      expect(result).toEqual(config); // Config persists
     });
   });
 

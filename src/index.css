@@ -112,4 +112,10 @@
     background-color: hsl(var(--muted));
     border-radius: 3px;
   }
+
+  /* Performance: Skip rendering for off-screen messages */
+  .message-container {
+    content-visibility: auto;
+    contain-intrinsic-size: 0 120px;
+  }
 }

@@ -1,19 +1,17 @@
 import { Message } from '@/types/chat';
 import { estimateTokens, estimateMessagesTokens, getTokenLimit } from './tokenizer';
-import {
-  retrieveRelevantMessages,
-  getConversationSummary,
-} from './memoryManager';
+import { retrieveRelevantMessages, getConversationSummary } from './memoryManager';
+import { CONTEXT_CONFIG } from '@/constants';
 
-// Token budget allocation
-const SYSTEM_PROMPT_BUDGET = 500;
-const SUMMARY_BUDGET = 1500;
-const RAG_BUDGET = 4000;
-const RECENT_MESSAGES_BUDGET = 4000;
-const RESPONSE_RESERVE = 4000;
-
-const RECENT_MESSAGES_COUNT = 6; // Keep last 6 messages verbatim
-const RAG_TOP_K = 5; // Retrieve top 5 relevant messages
+const {
+  SYSTEM_PROMPT_BUDGET,
+  SUMMARY_BUDGET,
+  RAG_BUDGET,
+  RECENT_MESSAGES_BUDGET,
+  RESPONSE_RESERVE,
+  RECENT_MESSAGES_COUNT,
+  RAG_TOP_K,
+} = CONTEXT_CONFIG;
 
 interface ContextResult {
   messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>;
@@ -23,14 +21,17 @@ interface ContextResult {
 }
 
 /**
- * Prepares context with unlimited memory support
- * 
- * Structure:
- * 1. System prompt (fixed)
- * 2. Conversation summary (compressed history)
- * 3. Retrieved relevant messages (RAG)
- * 4. Recent messages (verbatim)
- * 5. Current message
+ * Truncate text to approximate token count
+ */
+function truncateToTokens(text: string, maxTokens: number): string {
+  const currentTokens = estimateTokens(text);
+  if (currentTokens <= maxTokens) return text;
+  const maxChars = maxTokens * 4;
+  return text.slice(0, maxChars) + '...';
+}
+
+/**
+ * Prepares context with unlimited memory support (RAG)
  */
 export async function prepareContextWithMemory(
   conversationId: string,
@@ -92,8 +93,8 @@ export async function prepareContextWithMemory(
           apiMessages.push({ role: 'system', content: ragContent });
           usedTokens += ragTokens;
         }
-      } catch (e) {
-        console.warn('RAG retrieval failed:', e);
+      } catch {
+        // RAG retrieval failed, continue without it
       }
     }
   }
@@ -103,9 +104,8 @@ export async function prepareContextWithMemory(
   let recentTokens = 0;
   const recentToInclude: Message[] = [];
 
-  // Add recent messages from oldest to newest, respecting budget
   for (const msg of recentMessages) {
-    const msgTokens = estimateTokens(msg.content) + 4; // +4 for role overhead
+    const msgTokens = estimateTokens(msg.content) + 4;
     if (recentTokens + msgTokens <= Math.min(RECENT_MESSAGES_BUDGET, remainingBudget)) {
       recentToInclude.push(msg);
       recentTokens += msgTokens;
@@ -113,14 +113,10 @@ export async function prepareContextWithMemory(
   }
 
   for (const msg of recentToInclude) {
-    apiMessages.push({
-      role: msg.role as 'user' | 'assistant',
-      content: msg.content,
-    });
+    apiMessages.push({ role: msg.role as 'user' | 'assistant', content: msg.content });
   }
   usedTokens += recentTokens;
 
-  // Determine if summarization is needed
   const oldMessages = messages.slice(0, -RECENT_MESSAGES_COUNT);
   const needsSummarization = oldMessages.length > 10 && !summary;
 
@@ -172,7 +168,6 @@ export function prepareContext(
     };
   }
 
-  // Over limit: keep recent, flag for summarization
   const recentMessages = messages.slice(-RECENT_MESSAGES_COUNT);
   const oldMessages = messages.slice(0, -RECENT_MESSAGES_COUNT);
 
@@ -190,10 +185,7 @@ export function prepareContext(
   }
 
   for (const msg of recentMessages) {
-    contextMessages.push({
-      role: msg.role as 'user' | 'assistant',
-      content: msg.content,
-    });
+    contextMessages.push({ role: msg.role as 'user' | 'assistant', content: msg.content });
   }
 
   return {
@@ -207,12 +199,8 @@ export function prepareContext(
 /**
  * Creates a prompt for summarization
  */
-export function createSummarizationPrompt(
-  messages: Message[],
-  existingSummary?: string
-): string {
+export function createSummarizationPrompt(messages: Message[], existingSummary?: string): string {
   let conversationText = '';
-
   for (const msg of messages) {
     const role = msg.role === 'user' ? 'User' : 'Assistant';
     conversationText += `${role}: ${msg.content}\n\n`;
@@ -231,18 +219,6 @@ Keep under 1500 words. Focus on information needed to continue naturally.`;
   }
 
   return `${basePrompt}\n\nConversation:\n${conversationText}\n\nSummary:`;
-}
-
-/**
- * Truncate text to approximate token count
- */
-function truncateToTokens(text: string, maxTokens: number): string {
-  const currentTokens = estimateTokens(text);
-  if (currentTokens <= maxTokens) return text;
-
-  // Approximate: 4 chars per token
-  const maxChars = maxTokens * 4;
-  return text.slice(0, maxChars) + '...';
 }
 
 /**

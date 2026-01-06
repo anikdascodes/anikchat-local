@@ -3,13 +3,14 @@ import { useState, useMemo, memo, useCallback, useEffect } from 'react';
 import { Message } from '@/types/chat';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { loadMessageImages, isImageRef } from '@/lib/imageStorage';
-import { ImageLightbox, ThinkingBlock, MessageEditor, MessageActions } from './chat';
+import { ImageLightbox, ThinkingBlock, MessageEditor, MessageActions, BranchNavigator } from './chat';
 
 interface ChatMessageProps {
   message: Message;
   isLast?: boolean;
   onRegenerate?: () => void;
   onEdit?: (messageId: string, newContent: string) => void;
+  onBranchNavigate?: (messageId: string, branchIndex: number) => void;
   messageIndex?: number;
 }
 
@@ -33,6 +34,7 @@ export const ChatMessage = memo(function ChatMessage({
   message, 
   onRegenerate,
   onEdit,
+  onBranchNavigate,
 }: ChatMessageProps) {
   const [showThinking, setShowThinking] = useState(false);
   const [expandedImage, setExpandedImage] = useState<string | null>(null);
@@ -92,6 +94,15 @@ export const ChatMessage = memo(function ChatMessage({
               {/* Header */}
               <div className="flex items-center gap-2 mb-1.5">
                 <span className="font-medium text-sm">{isUser ? 'You' : 'AnikChat'}</span>
+                
+                {/* Branch Navigator */}
+                {message.totalSiblings && message.totalSiblings > 1 && onBranchNavigate && (
+                  <BranchNavigator
+                    currentIndex={message.siblingIndex || 0}
+                    totalBranches={message.totalSiblings}
+                    onNavigate={(index) => onBranchNavigate(message.id, index)}
+                  />
+                )}
                 {isUser && onEdit && !isEditing && (
                   <button
                     onClick={startEditing}

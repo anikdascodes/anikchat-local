@@ -4,19 +4,31 @@
  * Stores ALL data (chats, media, embeddings) in user-selected folder:
  * - File System Access API for Chrome/Edge (recommended)
  * - IndexedDB fallback for Firefox/Safari
- * 
- * Folder structure:
- * /anikchat-data/
- *   ├── conversations/     # Chat history JSON files
- *   ├── media/            # Images and attachments
- *   ├── embeddings/       # Vector embeddings for RAG
- *   ├── summaries/        # Conversation summaries
- *   └── config.json       # App configuration
  */
+
+import { logger } from './logger';
 
 export type StorageType = 'filesystem' | 'indexeddb';
 
-// Check if File System Access API is supported
+// Extended FileSystemDirectoryHandle with permission methods
+interface ExtendedFileSystemDirectoryHandle extends FileSystemDirectoryHandle {
+  queryPermission(descriptor: { mode: 'read' | 'readwrite' }): Promise<PermissionState>;
+  requestPermission(descriptor: { mode: 'read' | 'readwrite' }): Promise<PermissionState>;
+  values(): AsyncIterableIterator<FileSystemHandle>;
+}
+
+interface ShowDirectoryPickerOptions {
+  id?: string;
+  mode?: 'read' | 'readwrite';
+  startIn?: 'desktop' | 'documents' | 'downloads' | 'music' | 'pictures' | 'videos';
+}
+
+declare global {
+  interface Window {
+    showDirectoryPicker?(options?: ShowDirectoryPickerOptions): Promise<FileSystemDirectoryHandle>;
+  }
+}
+
 export const isFileSystemSupported = (): boolean => {
   return typeof window !== 'undefined' && 'showDirectoryPicker' in window;
 };
@@ -112,55 +124,62 @@ class IndexedDBStorage {
 
 // File System Access API wrapper
 class FileSystemStorage {
-  private rootHandle: FileSystemDirectoryHandle | null = null;
+  private rootHandle: ExtendedFileSystemDirectoryHandle | null = null;
   private dataHandle: FileSystemDirectoryHandle | null = null;
   private handleStore = new IndexedDBStorage('anikchat-handles');
 
   async init(): Promise<boolean> {
     try {
       await this.handleStore.init();
-      const saved = await this.handleStore.get<FileSystemDirectoryHandle>('root-handle');
+      const saved = await this.handleStore.get<ExtendedFileSystemDirectoryHandle>('root-handle');
       if (saved) {
-        const permission = await (saved as any).queryPermission({ mode: 'readwrite' });
+        const permission = await saved.queryPermission({ mode: 'readwrite' });
         if (permission === 'granted') {
           this.rootHandle = saved;
           this.dataHandle = await this.rootHandle.getDirectoryHandle('anikchat-data', { create: true });
           await this.ensureDirectories();
           return true;
         }
-        this.rootHandle = saved; // Store for re-auth
+        this.rootHandle = saved;
       }
-    } catch { /* no saved handle */ }
+    } catch {
+      logger.debug('No saved file system handle');
+    }
     return false;
   }
 
   async reauthorize(): Promise<boolean> {
     if (!this.rootHandle) return false;
     try {
-      const permission = await (this.rootHandle as any).requestPermission({ mode: 'readwrite' });
+      const permission = await this.rootHandle.requestPermission({ mode: 'readwrite' });
       if (permission === 'granted') {
         this.dataHandle = await this.rootHandle.getDirectoryHandle('anikchat-data', { create: true });
         await this.ensureDirectories();
         return true;
       }
-    } catch { /* denied */ }
+    } catch {
+      logger.debug('Permission denied for file system');
+    }
     return false;
   }
 
   async pickDirectory(): Promise<boolean> {
+    if (!window.showDirectoryPicker) return false;
     try {
-      const handle = await (window as any).showDirectoryPicker({
+      const handle = await window.showDirectoryPicker({
         id: 'anikchat-storage',
         mode: 'readwrite',
         startIn: 'documents',
-      });
+      }) as ExtendedFileSystemDirectoryHandle;
       this.rootHandle = handle;
       this.dataHandle = await handle.getDirectoryHandle('anikchat-data', { create: true });
       await this.ensureDirectories();
       await this.handleStore.set('root-handle', handle);
       return true;
     } catch (e) {
-      if ((e as Error).name !== 'AbortError') console.error('Folder pick error:', e);
+      if ((e as Error).name !== 'AbortError') {
+        logger.error('Folder pick error:', e);
+      }
       return false;
     }
   }
@@ -196,7 +215,6 @@ class FileSystemStorage {
     return this.dataHandle.getDirectoryHandle(name, { create: true });
   }
 
-  // Generic JSON file operations
   async getJSON<T>(subdir: string, filename: string): Promise<T | null> {
     try {
       const dir = await this.getSubDir(subdir);
@@ -221,14 +239,16 @@ class FileSystemStorage {
     try {
       const dir = await this.getSubDir(subdir);
       await dir.removeEntry(`${filename}.json`);
-    } catch { /* not found */ }
+    } catch {
+      // File not found, ignore
+    }
   }
 
   async listFiles(subdir: string): Promise<string[]> {
     try {
-      const dir = await this.getSubDir(subdir);
+      const dir = await this.getSubDir(subdir) as ExtendedFileSystemDirectoryHandle;
       const files: string[] = [];
-      for await (const entry of (dir as any).values()) {
+      for await (const entry of dir.values()) {
         if (entry.kind === 'file' && entry.name.endsWith('.json')) {
           files.push(entry.name.replace('.json', ''));
         }
@@ -239,7 +259,6 @@ class FileSystemStorage {
     }
   }
 
-  // Media operations
   async saveMedia(filename: string, blob: Blob): Promise<string> {
     const dir = await this.getSubDir('media');
     const fileHandle = await dir.getFileHandle(filename, { create: true });
@@ -263,31 +282,37 @@ class FileSystemStorage {
     try {
       const dir = await this.getSubDir('media');
       await dir.removeEntry(filename);
-    } catch { /* not found */ }
+    } catch {
+      // File not found, ignore
+    }
   }
 
   async getStorageSize(): Promise<number> {
     if (!this.dataHandle) return 0;
     let total = 0;
-    const calcSize = async (dir: FileSystemDirectoryHandle) => {
-      for await (const entry of (dir as any).values()) {
+    const calcSize = async (dir: ExtendedFileSystemDirectoryHandle) => {
+      for await (const entry of dir.values()) {
         if (entry.kind === 'file') {
-          total += (await entry.getFile()).size;
+          const fileHandle = entry as FileSystemFileHandle;
+          total += (await fileHandle.getFile()).size;
         } else {
-          await calcSize(entry);
+          await calcSize(entry as ExtendedFileSystemDirectoryHandle);
         }
       }
     };
-    await calcSize(this.dataHandle);
+    await calcSize(this.dataHandle as ExtendedFileSystemDirectoryHandle);
     return total;
   }
 }
 
 // Main Storage Service - Singleton
+// Config (API keys, models) → always in IndexedDB (browser persistent)
+// Chat data → user's local folder via File System API
 class StorageService {
   private type: StorageType = 'indexeddb';
-  private idb = new IndexedDBStorage();
-  private fs = new FileSystemStorage();
+  private idb = new IndexedDBStorage();          // For config (persistent)
+  private configIdb = new IndexedDBStorage('anikchat-config-db'); // Dedicated config store
+  private fs = new FileSystemStorage();          // For chat data
   private initialized = false;
   private initPromise: Promise<void> | null = null;
 
@@ -296,13 +321,16 @@ class StorageService {
     if (this.initPromise) return this.initPromise;
 
     this.initPromise = (async () => {
+      // Always init config DB (browser persistent)
+      await this.configIdb.init();
+      
       const savedType = localStorage.getItem('anikchat-storage-type') as StorageType | null;
       
       if (savedType === 'filesystem' && isFileSystemSupported()) {
         const connected = await this.fs.init();
         this.type = connected ? 'filesystem' : 'indexeddb';
         if (!connected && this.fs.hasSavedHandle()) {
-          this.type = 'filesystem'; // Needs re-auth
+          this.type = 'filesystem';
         }
       } else {
         await this.idb.init();
@@ -314,7 +342,6 @@ class StorageService {
     return this.initPromise;
   }
 
-  // Check if first time (no storage configured)
   isFirstTime(): boolean {
     return !localStorage.getItem('anikchat-storage-type');
   }
@@ -364,7 +391,6 @@ class StorageService {
   }
 
   private async migrateToFileSystem(): Promise<void> {
-    // Migrate conversations from localStorage
     const convData = localStorage.getItem('openchat-conversations');
     if (convData) {
       try {
@@ -372,18 +398,20 @@ class StorageService {
         for (const conv of convs) {
           await this.fs.setJSON('conversations', conv.id, conv);
         }
-      } catch { /* skip */ }
+      } catch {
+        logger.debug('Migration: no localStorage conversations');
+      }
     }
 
-    // Migrate config
     const configData = localStorage.getItem('openchat-config');
     if (configData) {
       try {
         await this.fs.setJSON('', 'config', JSON.parse(configData));
-      } catch { /* skip */ }
+      } catch {
+        logger.debug('Migration: no localStorage config');
+      }
     }
 
-    // Migrate from IndexedDB
     try {
       const keys = await this.idb.getAllKeys();
       for (const key of keys) {
@@ -396,7 +424,9 @@ class StorageService {
           await this.fs.setJSON('summaries', key.replace('summary-', ''), value);
         }
       }
-    } catch { /* skip */ }
+    } catch {
+      logger.debug('Migration: no IndexedDB data');
+    }
   }
 
   // Conversation operations
@@ -495,7 +525,6 @@ class StorageService {
     if (this.type === 'filesystem') {
       return this.fs.saveMedia(filename, blob);
     }
-    // IndexedDB: store as base64
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onloadend = async () => {
@@ -518,22 +547,15 @@ class StorageService {
     return res.blob();
   }
 
-  // Config operations
+  // Config operations - ALWAYS in IndexedDB (browser persistent, never deleted unless user clears)
   async getConfig<T>(): Promise<T | null> {
     await this.init();
-    if (this.type === 'filesystem') {
-      return this.fs.getJSON('', 'config');
-    }
-    return this.idb.get('config');
+    return this.configIdb.get('config');
   }
 
   async saveConfig<T>(data: T): Promise<void> {
     await this.init();
-    if (this.type === 'filesystem') {
-      await this.fs.setJSON('', 'config', data);
-    } else {
-      await this.idb.set('config', data);
-    }
+    await this.configIdb.set('config', data);
   }
 
   async getStorageSize(): Promise<number> {
@@ -544,6 +566,7 @@ class StorageService {
     return this.idb.getStorageSize();
   }
 
+  // Clear chat data only (preserves config/API keys)
   async clearAll(): Promise<void> {
     await this.init();
     if (this.type === 'filesystem') {
@@ -556,8 +579,20 @@ class StorageService {
     } else {
       await this.idb.clear();
     }
+    // Note: Config in configIdb is NOT cleared - API keys persist
+  }
+
+  // Explicitly delete config (API keys, models) - only when user requests
+  async clearConfig(): Promise<void> {
+    await this.init();
+    await this.configIdb.delete('config');
+  }
+
+  // Clear everything including config
+  async clearEverything(): Promise<void> {
+    await this.clearAll();
+    await this.clearConfig();
   }
 }
 
-// Singleton
 export const storageService = new StorageService();

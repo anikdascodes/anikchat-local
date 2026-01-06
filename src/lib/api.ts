@@ -1,8 +1,13 @@
 import { APIConfig, Message, getActiveProviderAndModel } from '@/types/chat';
 import { prepareContext, prepareContextWithMemory, createSummarizationPrompt } from './contextManager';
-import { getImageFormatConfig, getProviderKey, detectProviderType } from './providerUtils';
+import { getProviderKey, detectProviderType } from './providerUtils';
 import { storeMessage, saveConversationSummary } from './memoryManager';
 import { loadImage, isImageRef } from './imageStorage';
+import { logger } from './logger';
+import { UI_CONFIG } from '@/constants';
+import { checkRateLimit, waitForRateLimit } from './rateLimit';
+
+const { CHUNK_TIMEOUT_MS, REQUEST_TIMEOUT_MS } = UI_CONFIG;
 
 // Different message formats for different providers
 type OpenAIImageContent = { type: 'image_url'; image_url: { url: string; detail?: string } };
@@ -106,6 +111,16 @@ export async function streamChat(options: StreamOptions): Promise<void> {
     return;
   }
 
+  // Check rate limit
+  const providerKey = getProviderKey(provider.baseUrl);
+  const rateLimitResult = checkRateLimit(provider.id, providerKey);
+  
+  if (!rateLimitResult.allowed) {
+    const waitSec = Math.ceil((rateLimitResult.retryAfterMs || 1000) / 1000);
+    onError(new Error(`Rate limit reached. Please wait ${waitSec} seconds before sending another message.`));
+    return;
+  }
+
   // Use memory-enhanced context if conversationId provided
   let contextResult;
   if (conversationId) {
@@ -129,7 +144,6 @@ export async function streamChat(options: StreamOptions): Promise<void> {
   }
 
   const apiMessages: ChatMessage[] = [];
-  const providerKey = getProviderKey(provider.baseUrl);
   const providerType = detectProviderType(provider.baseUrl);
 
   // Helper to extract base64 and mime type from data URL
@@ -158,7 +172,7 @@ export async function streamChat(options: StreamOptions): Promise<void> {
 
     if (hasImages) {
       if (!model.isVisionModel) {
-        console.warn(`Model "${model.modelId}" is not marked as vision-capable, but images were attached.`);
+        logger.warn(`Model "${model.modelId}" is not marked as vision-capable, but images were attached.`);
       }
 
       // Load images (may be refs or data URLs)
@@ -225,7 +239,7 @@ export async function streamChat(options: StreamOptions): Promise<void> {
   const isAnthropic = providerType === 'anthropic';
   const isGeminiNative = providerType === 'google-native';
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 60000);
+  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
   // Check if this request has images (for SambaNova token limit)
   const hasImagesInRequest = apiMessages.some(msg =>
@@ -293,7 +307,6 @@ export async function streamChat(options: StreamOptions): Promise<void> {
     const decoder = new TextDecoder();
     let buffer = '';
     let hasReceivedContent = false;
-    const CHUNK_TIMEOUT = 30000; // 30 seconds timeout between chunks
 
     // Helper function to read with timeout
     const readWithTimeout = async (): Promise<ReadableStreamReadResult<Uint8Array>> => {
@@ -301,7 +314,7 @@ export async function streamChat(options: StreamOptions): Promise<void> {
         const timeoutId = setTimeout(() => {
           reader.cancel();
           reject(new Error('CHUNK_TIMEOUT'));
-        }, CHUNK_TIMEOUT);
+        }, CHUNK_TIMEOUT_MS);
 
         reader.read().then((result) => {
           clearTimeout(timeoutId);
@@ -442,7 +455,7 @@ export async function summarizeMessages({
   const baseUrl = provider.baseUrl.replace(/\/+$/, '');
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 30000);
+  const timeoutId = setTimeout(() => controller.abort(), CHUNK_TIMEOUT_MS);
 
   try {
     const headers: Record<string, string> = {

@@ -1,55 +1,67 @@
-import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react-swc";
-import path from "path";
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react-swc';
+import path from 'path';
 import { VitePWA } from 'vite-plugin-pwa';
-import { componentTagger } from "lovable-tagger";
 
-// https://vitejs.dev/config/
 export default defineConfig(({ mode }) => ({
-  server: {
-    host: "::",
-    port: 8080,
-  },
   plugins: [
     react(),
-    mode === "development" && componentTagger(),
     VitePWA({
-      registerType: 'autoUpdate',
-      includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg'],
+      registerType: 'prompt',
+      includeAssets: ['favicon.ico', 'favicon.png', 'pwa-192x192.png', 'pwa-512x512.png'],
       manifest: {
         name: 'AnikChat',
         short_name: 'AnikChat',
-        description: 'Your intelligent AI chat assistant',
-        theme_color: '#09090b', // zinc-950
-        background_color: '#09090b',
-        display: 'standalone',
-        scope: '/',
-        start_url: '/',
-        orientation: 'portrait',
+        description: 'Secure local-first AI chat with your own API keys',
+        theme_color: '#000000',
         icons: [
+          { src: 'pwa-192x192.png', sizes: '192x192', type: 'image/png' },
+          { src: 'pwa-512x512.png', sizes: '512x512', type: 'image/png' },
+        ],
+      },
+      workbox: {
+        globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
+        runtimeCaching: [
           {
-            src: 'pwa-192x192.png',
-            sizes: '192x192',
-            type: 'image/png'
+            // Don't cache API calls
+            urlPattern: /^https:\/\/api\./i,
+            handler: 'NetworkOnly',
           },
-          {
-            src: 'pwa-512x512.png',
-            sizes: '512x512',
-            type: 'image/png'
-          },
-          {
-            src: 'pwa-512x512.png',
-            sizes: '512x512',
-            type: 'image/png',
-            purpose: 'any maskable'
-          }
-        ]
-      }
-    })
-  ].filter(Boolean),
+        ],
+      },
+    }),
+  ],
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "./src"),
+      '@': path.resolve(__dirname, './src'),
     },
+  },
+  build: {
+    target: 'esnext',
+    minify: 'esbuild',
+    sourcemap: mode === 'development',
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          // Core React - always needed
+          'react-vendor': ['react', 'react-dom', 'react-router-dom'],
+          // UI components
+          'ui-vendor': ['@radix-ui/react-dialog', '@radix-ui/react-dropdown-menu', '@radix-ui/react-tooltip', '@radix-ui/react-scroll-area', '@radix-ui/react-select', '@radix-ui/react-tabs'],
+          // Markdown rendering - lazy loaded
+          'markdown': ['react-markdown', 'remark-gfm'],
+          // Code highlighting - lazy loaded
+          'syntax': ['react-syntax-highlighter'],
+          // Heavy optional features - lazy loaded
+          'math': ['katex', 'rehype-katex', 'remark-math'],
+          // Vector search - lazy loaded only when needed
+          'embeddings': ['client-vector-search'],
+        },
+      },
+    },
+    chunkSizeWarningLimit: 600,
+  },
+  optimizeDeps: {
+    include: ['react', 'react-dom', 'react-router-dom'],
+    exclude: ['client-vector-search'], // Don't pre-bundle heavy optional deps
   },
 }));

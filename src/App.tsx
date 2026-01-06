@@ -9,6 +9,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useRegisterSW } from 'virtual:pwa-register/react';
 import { storageService } from "@/lib/storageService";
 import { StorageSetup } from "@/components/StorageSetup";
+import { logger } from "@/lib/logger";
 import Index from "./pages/Index";
 
 // Lazy load Settings page for faster initial load
@@ -27,10 +28,10 @@ const App = () => {
     updateServiceWorker,
   } = useRegisterSW({
     onRegistered(r) {
-      console.log('SW Registered: ' + r);
+      logger.info('SW Registered: ' + r);
     },
     onRegisterError(error) {
-      console.log('SW registration error', error);
+      logger.error('SW registration error', error);
     },
   });
 
@@ -83,16 +84,6 @@ const App = () => {
       });
     }
   }, [needRefresh, updateServiceWorker]);
-
-  // Preload embedding model for unlimited context (async, non-blocking)
-  useEffect(() => {
-    if (!isReady || showStorageSetup) return;
-    import('@/lib/memoryManager').then(({ preloadEmbeddingModel }) => {
-      preloadEmbeddingModel().then(loaded => {
-        if (loaded) console.log('Embedding model loaded for unlimited context');
-      });
-    }).catch(() => {});
-  }, [isReady, showStorageSetup]);
 
   // Show loading while initializing
   if (!isReady) {

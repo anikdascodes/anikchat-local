@@ -1,5 +1,5 @@
-import { useState, useCallback } from 'react';
-import { Plus, Trash2, Eye, EyeOff, ChevronDown, ChevronRight, Check, Server, Cpu, Loader2, Zap } from 'lucide-react';
+import { useState, useCallback, useEffect } from 'react';
+import { Plus, Trash2, Eye, EyeOff, ChevronDown, ChevronRight, Check, Server, Cpu, Loader2, Zap, Shield } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -16,6 +16,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { APIConfig, LLMProvider, LLMModel, generateId } from '@/types/chat';
 import { toast } from 'sonner';
+import { encryptApiKey, decryptApiKey, isEncrypted } from '@/lib/crypto';
 
 // Pre-configured providers with their base URLs
 const PRESET_PROVIDERS = [

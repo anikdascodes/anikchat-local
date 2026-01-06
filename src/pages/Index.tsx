@@ -10,6 +10,7 @@ import { EmptyState } from '@/components/EmptyState';
 import { ModelSelector } from '@/components/ModelSelector';
 import { ConversationSearch } from '@/components/ConversationSearch';
 import { TokenTracker } from '@/components/TokenTracker';
+import { StreamingMessage } from '@/components/StreamingMessage';
 import { useLocalStorage } from '@/hooks/useLocalStorage';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { useConversations } from '@/hooks/useConversations';
@@ -17,6 +18,7 @@ import { useChat } from '@/hooks/useChat';
 import { useFolders } from '@/hooks/useFolders';
 import { useConfig } from '@/hooks/useConfig';
 import { APIConfig, defaultConfig, hasActiveModel, getActiveProviderAndModel } from '@/types/chat';
+import { UI_CONFIG } from '@/constants';
 import { toast } from 'sonner';
 import {
   Tooltip,
@@ -26,7 +28,7 @@ import {
 } from '@/components/ui/tooltip';
 
 // Use virtualization for conversations with many messages
-const VIRTUALIZATION_THRESHOLD = 50;
+const VIRTUALIZATION_THRESHOLD = 20; // Reduced from 50 for better performance
 
 export default function Index() {
   const navigate = useNavigate();
@@ -63,10 +65,13 @@ export default function Index() {
   // Use chat hook
   const {
     isLoading,
+    streamingContent,
+    streamingMessageId,
     handleSend,
     handleStop,
     handleRegenerate,
     handleEditMessage,
+    handleBranchNavigate,
   } = useChat({
     config,
     conversations,
@@ -267,12 +272,13 @@ export default function Index() {
                     return null;
                   }
                   return (
-                    <div key={msg.id} id={`message-${msg.id}`}>
+                    <div key={msg.id} id={`message-${msg.id}`} className="message-container">
                       <ChatMessage
                         message={msg}
                         isLast={(isLastAssistant || isLastUserWithNoResponse) && !isLoading}
                         onRegenerate={(isLastAssistant || isLastUserWithNoResponse) && !isLoading ? handleRegenerate : undefined}
                         onEdit={msg.role === 'user' && !isLoading ? handleEditMessage : undefined}
+                        onBranchNavigate={handleBranchNavigate}
                         messageIndex={idx}
                       />
                     </div>
@@ -284,6 +290,12 @@ export default function Index() {
                   )}
               </div>
             )}
+
+            {/* Streaming message - rendered separately for performance */}
+            {isLoading && streamingContent && (
+              <StreamingMessage content={streamingContent} />
+            )}
+
             <ChatInput
               ref={inputRef}
               onSend={handleSend}

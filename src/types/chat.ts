@@ -5,6 +5,10 @@ export interface Message {
   images?: string[];
   timestamp: Date;
   tokenCount?: number;
+  // Branching support
+  parentId?: string;
+  siblingIndex?: number;
+  totalSiblings?: number;
 }
 
 export interface MessageBranch {

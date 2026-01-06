@@ -41,7 +41,7 @@ export function useConversations(): UseConversationsReturn {
           }
           convs.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
           setConversationsState(convs);
-          
+
           // Restore active conversation immediately after loading
           const savedActiveId = localStorage.getItem('openchat-active-conversation');
           if (savedActiveId && convs.find(c => c.id === savedActiveId)) {
@@ -58,12 +58,12 @@ export function useConversations(): UseConversationsReturn {
             const convs = JSON.parse(localData) as Conversation[];
             convs.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
             setConversationsState(convs);
-            
+
             // Migrate to new storage
             for (const conv of convs) {
               await storageService.saveConversation(conv.id, conv);
             }
-            
+
             // Restore active
             const savedActiveId = localStorage.getItem('openchat-active-conversation');
             if (savedActiveId && convs.find(c => c.id === savedActiveId)) {
@@ -106,7 +106,7 @@ export function useConversations(): UseConversationsReturn {
   const saveConversations = useCallback(async (convs: Conversation[]) => {
     // Immediate localStorage backup (fast, prevents data loss)
     localStorage.setItem('openchat-conversations', JSON.stringify(convs));
-    
+
     // Save to file system storage
     for (const conv of convs) {
       await storageService.saveConversation(conv.id, conv);
@@ -128,20 +128,23 @@ export function useConversations(): UseConversationsReturn {
     };
   }, []);
 
-  const setConversations = useCallback((value: Conversation[] | ((prev: Conversation[]) => Conversation[])) => {
+  const setConversations = useCallback((value: Conversation[] | ((prev: Conversation[]) => Conversation[]), options?: { skipPersist?: boolean }) => {
     setConversationsState(prev => {
       const newConvs = typeof value === 'function' ? value(prev) : value;
-      
+
       // Track pending for flush
       pendingConvsRef.current = newConvs;
-      
-      // Immediate localStorage backup
-      localStorage.setItem('openchat-conversations', JSON.stringify(newConvs));
-      
-      // Debounced file system save
+
+      // Skip persistence during streaming for performance
+      if (!options?.skipPersist) {
+        // Immediate localStorage backup
+        localStorage.setItem('openchat-conversations', JSON.stringify(newConvs));
+      }
+
+      // Debounced file system save (always, but with longer delay)
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-      saveTimeoutRef.current = setTimeout(() => saveConversations(newConvs), 500);
-      
+      saveTimeoutRef.current = setTimeout(() => saveConversations(newConvs), options?.skipPersist ? 1000 : 500);
+
       return newConvs;
     });
   }, [saveConversations]);
@@ -163,7 +166,7 @@ export function useConversations(): UseConversationsReturn {
       // Delete from storage
       await storageService.deleteConversation(id);
       await deleteConversationMemory(id);
-      
+
       setConversationsState((prev) => {
         const remaining = prev.filter((c) => c.id !== id);
         if (activeConversationId === id) {
