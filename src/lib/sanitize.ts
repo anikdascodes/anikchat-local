@@ -41,8 +41,20 @@ export function sanitizeText(text: string): string {
  * Sanitize user input before sending to API
  */
 export function sanitizeInput(input: string): string {
-  // Remove null bytes and other control characters
-  return input.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '').trim();
+  // Remove null bytes and other control characters without using a regex
+  // (eslint no-control-regex).
+  let out = '';
+  for (let i = 0; i < input.length; i++) {
+    const code = input.charCodeAt(i);
+    const isControl =
+      (code >= 0x00 && code <= 0x08) ||
+      code === 0x0b ||
+      code === 0x0c ||
+      (code >= 0x0e && code <= 0x1f) ||
+      code === 0x7f;
+    if (!isControl) out += input[i];
+  }
+  return out.trim();
 }
 
 /**

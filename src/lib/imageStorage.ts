@@ -7,13 +7,22 @@
 
 import { storageService } from './storageService';
 
-// Simple hash for deduplication
-async function hashImage(base64: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(base64.slice(0, 1000)); // Hash first 1KB for speed
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+// Stable hash for deduplication (hash full bytes to avoid collisions).
+async function hashBlob(blob: Blob): Promise<string> {
+  const maybeBlob = blob as Blob & { arrayBuffer?: () => Promise<ArrayBuffer> };
+  const bytes =
+    typeof maybeBlob.arrayBuffer === 'function'
+      ? await maybeBlob.arrayBuffer()
+      : await new Promise<ArrayBuffer>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as ArrayBuffer);
+          reader.onerror = () => reject(reader.error);
+          reader.readAsArrayBuffer(blob);
+        });
+  const hashBuffer = await crypto.subtle.digest('SHA-256', bytes);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.slice(0, 8).map(b => b.toString(16).padStart(2, '0')).join('');
+  // 16 bytes (128-bit) is enough for stable file IDs while keeping names short.
+  return hashArray.slice(0, 16).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
 // Convert data URL to blob
@@ -47,15 +56,15 @@ export async function storeImage(dataUrl: string): Promise<string> {
     return dataUrl; // Already a reference or URL
   }
 
-  const hash = await hashImage(dataUrl);
-  const imageId = `${hash}-${Date.now()}`;
-  
-  // Store as blob in file system, or base64 in IndexedDB
   const blob = dataUrlToBlob(dataUrl);
   const ext = blob.type.split('/')[1] || 'jpg';
-  await storageService.saveMedia(`${imageId}.${ext}`, blob);
+  const hash = await hashBlob(blob);
+  const imageId = `${hash}.${ext}`;
   
-  return `${IMG_PREFIX}${imageId}.${ext}`;
+  // Store as blob in file system, or base64 in IndexedDB (keyed by stable hash for dedupe)
+  await storageService.saveMedia(imageId, blob);
+  
+  return `${IMG_PREFIX}${imageId}`;
 }
 
 /**

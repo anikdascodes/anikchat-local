@@ -44,13 +44,19 @@ export interface Conversation {
   tokenUsage?: TokenUsage;
   createdAt: Date;
   updatedAt: Date;
+  /** Indicates this is a placeholder for lazy loading */
+  isSkeleton?: boolean;
 }
+
+export type ModelCategory = 'llm' | 'audio';
 
 export interface LLMModel {
   id: string;
   modelId: string;
   displayName: string;
   isVisionModel: boolean;
+  /** Category of the model - 'llm' for chat/completion, 'audio' for transcription */
+  modelCategory?: ModelCategory;
 }
 
 // Provider types for API-specific handling
@@ -124,4 +130,30 @@ export const hasActiveModel = (config: APIConfig): boolean => {
   // Local providers don't require API keys
   const isLocal = provider.baseUrl.includes('localhost') || provider.baseUrl.includes('127.0.0.1');
   return !!(isLocal || provider.apiKey);
+};
+
+/**
+ * Get all audio models from all providers
+ */
+export const getAudioModels = (config: APIConfig): Array<{ provider: LLMProvider; model: LLMModel }> => {
+  if (!config?.providers) return [];
+
+  const audioModels: Array<{ provider: LLMProvider; model: LLMModel }> = [];
+
+  for (const provider of config.providers) {
+    for (const model of provider.models) {
+      if (model.modelCategory === 'audio') {
+        audioModels.push({ provider, model });
+      }
+    }
+  }
+
+  return audioModels;
+};
+
+/**
+ * Check if config has any audio models configured
+ */
+export const hasAudioModels = (config: APIConfig): boolean => {
+  return getAudioModels(config).length > 0;
 };

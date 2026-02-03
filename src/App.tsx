@@ -12,8 +12,45 @@ import { StorageSetup } from "@/components/StorageSetup";
 import { logger } from "@/lib/logger";
 import Index from "./pages/Index";
 
-// Lazy load Settings page for faster initial load
+// #region agent log
+window.debugLog = (message: string, data?: unknown, hypothesisId?: string) => {
+  if (message.includes('Chunk') || message.includes('render (streaming)')) {
+    if (Math.random() > 0.02) return; // Extreme throttling for high-freq logs
+  }
+
+  const timestamp = Date.now();
+  console.log(`[DEBUG] ${message}`, data);
+
+  try {
+    const logs = JSON.parse(localStorage.getItem('anikchat-debug-logs') || '[]');
+    logs.push({ message, data, hypothesisId, timestamp });
+    if (logs.length > 100) logs.shift();
+    localStorage.setItem('anikchat-debug-logs', JSON.stringify(logs));
+  } catch {
+    // Ignore localStorage failures (quota, private mode, etc.).
+  }
+};
+
+// High-precision Lag Monitor (only active in dev or manually enabled)
+let lastFrameTime = performance.now();
+const monitorLag = () => {
+  if (!import.meta.env.DEV) return; // Disabled in production
+  const now = performance.now();
+  const delta = now - lastFrameTime;
+  if (delta > 150) {
+    window.debugLog?.('UI JANK DETECTED', { duration: Math.round(delta) }, 'H1');
+  }
+  lastFrameTime = now;
+  requestAnimationFrame(monitorLag);
+};
+if (import.meta.env.DEV) requestAnimationFrame(monitorLag);
+
+window.debugLog?.('App initialized');
+// #endregion
+
+// Lazy load pages for faster initial load
 const Settings = lazy(() => import("./pages/Settings"));
+const TranscribeVideo = lazy(() => import("./pages/TranscribeVideo"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 
 const queryClient = new QueryClient();
@@ -39,7 +76,7 @@ const App = () => {
   useEffect(() => {
     const initStorage = async () => {
       await storageService.init();
-      
+
       if (storageService.isFirstTime()) {
         setShowStorageSetup(true);
       } else if (storageService.needsReauthorization()) {
@@ -63,7 +100,9 @@ const App = () => {
               setNeedsReauth(false);
               toast.success("Storage reconnected");
             } else {
-              toast.error("Could not reconnect. Using browser storage.");
+              await storageService.switchToIndexedDB();
+              setNeedsReauth(false);
+              toast.error("Could not reconnect. Switched to browser storage.");
             }
           },
         },
@@ -94,15 +133,6 @@ const App = () => {
     );
   }
 
-  // Show storage setup on first launch
-  if (showStorageSetup) {
-    return (
-      <ThemeProvider>
-        <StorageSetup onComplete={() => setShowStorageSetup(false)} isFirstTime />
-      </ThemeProvider>
-    );
-  }
-
   return (
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
@@ -110,22 +140,25 @@ const App = () => {
           <TooltipProvider>
             <Toaster />
             <Sonner />
-            <BrowserRouter>
-              <Suspense fallback={<div className="h-screen flex items-center justify-center bg-background"><div className="animate-pulse text-muted-foreground">Loading...</div></div>}>
-                <Routes>
-                  <Route path="/" element={<Index />} />
-                  <Route path="/settings" element={<Settings />} />
-                  {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
-                  <Route path="*" element={<NotFound />} />
-                </Routes>
-              </Suspense>
-            </BrowserRouter>
+            {showStorageSetup ? (
+              <StorageSetup onComplete={() => setShowStorageSetup(false)} isFirstTime />
+            ) : (
+              <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+                <Suspense fallback={<div className="h-screen flex items-center justify-center bg-background"><div className="animate-pulse text-muted-foreground">Loading...</div></div>}>
+                  <Routes>
+                    <Route path="/" element={<Index />} />
+                    <Route path="/settings" element={<Settings />} />
+                    <Route path="/transcribe" element={<TranscribeVideo />} />
+                    <Route path="*" element={<NotFound />} />
+                  </Routes>
+                </Suspense>
+              </BrowserRouter>
+            )}
           </TooltipProvider>
         </ThemeProvider>
       </QueryClientProvider>
     </ErrorBoundary>
   );
-
 };
 
 export default App;

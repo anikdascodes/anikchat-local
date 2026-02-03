@@ -16,7 +16,7 @@ describe('tokenizer', () => {
         const messages = [
             { role: 'user', content: 'Hello', id: '1', timestamp: new Date() },
             { role: 'assistant', content: 'Hi there', id: '2', timestamp: new Date() },
-        ] as any;
+        ] as Array<{ role: string; content: string }>;
 
         const tokens = estimateMessagesTokens(messages);
         // User: 5 chars -> 1.25 -> 2

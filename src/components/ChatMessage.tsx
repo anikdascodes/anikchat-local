@@ -15,6 +15,10 @@ interface ChatMessageProps {
 }
 
 function parseThinkingBlock(content: string): { thinking: string | null; output: string } {
+  if (!content.includes('<think>') && !content.includes('</think>')) {
+    return { thinking: null, output: content };
+  }
+
   const thinkRegex = /<think>([\s\S]*?)<\/think>/i;
   const match = content.match(thinkRegex);
 

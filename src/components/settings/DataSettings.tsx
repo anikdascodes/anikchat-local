@@ -48,7 +48,7 @@ export function DataSettings({
   onImportData,
 }: DataSettingsProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [storageType, setStorageType] = useState<StorageType>('localstorage');
+  const [storageType, setStorageType] = useState<StorageType>('indexeddb');
   const [storageDirName, setStorageDirName] = useState<string | null>(null);
   const [isStorageLoading, setIsStorageLoading] = useState(false);
   const [needsReauth, setNeedsReauth] = useState(false);
@@ -94,7 +94,10 @@ export function DataSettings({
         setStorageDirName(storageService.getDirectoryName());
         toast.success('Folder access restored!');
       } else {
+        await storageService.switchToIndexedDB();
         setStorageType('indexeddb');
+        setNeedsReauth(false);
+        setStorageDirName(null);
         toast.info('Could not access folder. Switched to browser storage.');
       }
     } catch {

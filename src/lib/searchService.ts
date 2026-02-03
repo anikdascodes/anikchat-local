@@ -61,10 +61,35 @@ export async function searchConversations(query: string, limit = 20): Promise<Se
 }
 
 /**
- * Search with highlighting
+ * Split text into parts that can be rendered safely with <mark> without HTML injection.
  */
-export function highlightMatch(text: string, query: string): string {
-  if (!query) return text;
-  const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
-  return text.replace(regex, '<mark>$1</mark>');
+export function getHighlightParts(
+  text: string,
+  query: string,
+): Array<{ text: string; isMatch: boolean }> {
+  const q = query.trim();
+  if (!q) return [{ text, isMatch: false }];
+
+  const lowerText = text.toLowerCase();
+  const lowerQuery = q.toLowerCase();
+
+  const parts: Array<{ text: string; isMatch: boolean }> = [];
+
+  let i = 0;
+  while (i < text.length) {
+    const idx = lowerText.indexOf(lowerQuery, i);
+    if (idx === -1) {
+      parts.push({ text: text.slice(i), isMatch: false });
+      break;
+    }
+
+    if (idx > i) {
+      parts.push({ text: text.slice(i, idx), isMatch: false });
+    }
+
+    parts.push({ text: text.slice(idx, idx + q.length), isMatch: true });
+    i = idx + q.length;
+  }
+
+  return parts.filter(p => p.text.length > 0);
 }

@@ -14,7 +14,7 @@ const {
 } = CONTEXT_CONFIG;
 
 interface ContextResult {
-  messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }>;
+  messages: Array<{ role: 'user' | 'assistant' | 'system'; content: string; sourceMessageId?: string }>;
   needsSummarization: boolean;
   messagesToSummarize: Message[];
   tokenCount: number;
@@ -40,7 +40,7 @@ export async function prepareContextWithMemory(
   modelId: string
 ): Promise<ContextResult> {
   const tokenLimit = getTokenLimit(modelId) - RESPONSE_RESERVE;
-  const apiMessages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }> = [];
+  const apiMessages: Array<{ role: 'user' | 'assistant' | 'system'; content: string; sourceMessageId?: string }> = [];
   let usedTokens = 0;
 
   // 1. System prompt
@@ -113,7 +113,7 @@ export async function prepareContextWithMemory(
   }
 
   for (const msg of recentToInclude) {
-    apiMessages.push({ role: msg.role as 'user' | 'assistant', content: msg.content });
+    apiMessages.push({ role: msg.role as 'user' | 'assistant', content: msg.content, sourceMessageId: msg.id });
   }
   usedTokens += recentTokens;
 
@@ -137,7 +137,7 @@ export function prepareContext(
   existingSummary: string | undefined,
   modelId: string
 ): ContextResult {
-  const apiMessages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }> = [];
+  const apiMessages: Array<{ role: 'user' | 'assistant' | 'system'; content: string; sourceMessageId?: string }> = [];
 
   if (systemPrompt?.trim()) {
     apiMessages.push({ role: 'system', content: systemPrompt.trim() });
@@ -153,6 +153,7 @@ export function prepareContext(
   const convertedMessages = messages.map((msg) => ({
     role: msg.role as 'user' | 'assistant',
     content: msg.content,
+    sourceMessageId: msg.id,
   }));
 
   const allMessages = [...apiMessages, ...convertedMessages];
@@ -171,7 +172,7 @@ export function prepareContext(
   const recentMessages = messages.slice(-RECENT_MESSAGES_COUNT);
   const oldMessages = messages.slice(0, -RECENT_MESSAGES_COUNT);
 
-  const contextMessages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }> = [];
+  const contextMessages: Array<{ role: 'user' | 'assistant' | 'system'; content: string; sourceMessageId?: string }> = [];
 
   if (systemPrompt?.trim()) {
     contextMessages.push({ role: 'system', content: systemPrompt.trim() });
@@ -185,7 +186,7 @@ export function prepareContext(
   }
 
   for (const msg of recentMessages) {
-    contextMessages.push({ role: msg.role as 'user' | 'assistant', content: msg.content });
+    contextMessages.push({ role: msg.role as 'user' | 'assistant', content: msg.content, sourceMessageId: msg.id });
   }
 
   return {

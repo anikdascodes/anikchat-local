@@ -1,9 +1,9 @@
-import { memo, useCallback, useState, useRef, useEffect } from 'react';
+import { memo, useCallback, useState, useRef, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { 
-  Plus, MessageSquare, Trash2, Settings, Download, Menu, X, 
-  Pencil, Check, XCircle, Search, FolderPlus, ChevronRight, 
-  ChevronDown, Folder, MoreHorizontal, FolderOpen
+import {
+  Plus, MessageSquare, Trash2, Settings, Download, Menu, X,
+  Pencil, Check, XCircle, Search, FolderPlus, ChevronRight,
+  ChevronDown, Folder, MoreHorizontal, FolderOpen, Video
 } from 'lucide-react';
 import { Conversation, ConversationFolder, generateId } from '@/types/chat';
 import { Input } from '@/components/ui/input';
@@ -50,12 +50,13 @@ interface ConversationSidebarProps {
   onCreateFolder: (name: string, color: string) => void;
   onDeleteFolder: (id: string) => void;
   onAssignFolder: (conversationId: string, folderId: string | null) => void;
+  isStreaming?: boolean;
 }
 
 // Draggable conversation item
-function DraggableConversation({ 
-  conv, 
-  isActive, 
+const DraggableConversation = memo(function DraggableConversation({
+  conv,
+  isActive,
   isEditing,
   editValue,
   onEditChange,
@@ -94,11 +95,10 @@ function DraggableConversation({
   return (
     <div
       ref={setNodeRef}
-      className={`group relative flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-all duration-200 text-sm ${
-        isActive 
-          ? 'bg-sidebar-accent shadow-sm' 
-          : 'hover:bg-sidebar-accent/50'
-      } ${isDragging ? 'opacity-50' : ''}`}
+      className={`group relative flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-all duration-200 text-sm ${isActive
+        ? 'bg-sidebar-accent shadow-sm'
+        : 'hover:bg-sidebar-accent/50'
+        } ${isDragging ? 'opacity-50' : ''}`}
       onClick={() => !isEditing && onSelect()}
       role="button"
       tabIndex={0}
@@ -107,28 +107,25 @@ function DraggableConversation({
       {...attributes}
       {...listeners}
     >
-      <MessageSquare 
-        className={`h-4 w-4 shrink-0 transition-colors duration-200 ${
-          isActive ? 'text-primary' : 'text-muted-foreground'
-        }`} 
-        aria-hidden="true" 
-      />
-      
-      <div className="flex-1 min-w-0 relative">
-        <span 
-          className={`block truncate transition-all duration-200 ${
-            isEditing ? 'opacity-0 invisible' : 'opacity-100 visible'
+      <MessageSquare
+        className={`h-4 w-4 shrink-0 transition-colors duration-200 ${isActive ? 'text-primary' : 'text-muted-foreground'
           }`}
+        aria-hidden="true"
+      />
+
+      <div className="flex-1 min-w-0 relative">
+        <span
+          className={`block truncate transition-all duration-200 ${isEditing ? 'opacity-0 invisible' : 'opacity-100 visible'
+            }`}
         >
           {conv.title}
         </span>
-        
-        <div 
-          className={`absolute inset-0 flex items-center transition-all duration-200 ${
-            isEditing 
-              ? 'opacity-100 visible' 
-              : 'opacity-0 invisible pointer-events-none'
-          }`}
+
+        <div
+          className={`absolute inset-0 flex items-center transition-all duration-200 ${isEditing
+            ? 'opacity-100 visible'
+            : 'opacity-0 invisible pointer-events-none'
+            }`}
         >
           <input
             ref={isEditing ? inputRef : null}
@@ -143,12 +140,11 @@ function DraggableConversation({
         </div>
       </div>
 
-      <div 
-        className={`flex items-center gap-0.5 transition-all duration-200 ${
-          isEditing 
-            ? 'opacity-100' 
-            : 'opacity-0 group-hover:opacity-100'
-        }`}
+      <div
+        className={`flex items-center gap-0.5 transition-all duration-200 ${isEditing
+          ? 'opacity-100'
+          : 'opacity-0 group-hover:opacity-100'
+          }`}
       >
         {isEditing ? (
           <>
@@ -200,8 +196,8 @@ function DraggableConversation({
                     {!conv.folderId && <Check className="h-4 w-4 ml-auto" />}
                   </DropdownMenuItem>
                   {folders.map(folder => (
-                    <DropdownMenuItem 
-                      key={folder.id} 
+                    <DropdownMenuItem
+                      key={folder.id}
                       onClick={(e) => { e.stopPropagation(); onAssignFolder(folder.id); }}
                     >
                       <div className={`w-3 h-3 rounded-full ${folder.color} mr-2`} />
@@ -212,7 +208,7 @@ function DraggableConversation({
                   <DropdownMenuSeparator />
                 </>
               )}
-              <DropdownMenuItem 
+              <DropdownMenuItem
                 onClick={(e) => { e.stopPropagation(); onDelete(); }}
                 className="text-destructive focus:text-destructive"
               >
@@ -224,10 +220,10 @@ function DraggableConversation({
       </div>
     </div>
   );
-}
+});
 
 // Droppable folder
-function DroppableFolder({
+const DroppableFolder = memo(function DroppableFolder({
   folder,
   conversations,
   isExpanded,
@@ -256,12 +252,11 @@ function DroppableFolder({
   return (
     <div ref={setNodeRef} className="mb-1">
       <div
-        className={`flex items-center gap-2 px-3 py-2 text-sm rounded-lg cursor-pointer transition-all duration-200 group ${
-          isOver ? 'bg-primary/20 ring-2 ring-primary/50' : 'hover:bg-sidebar-accent/50'
-        }`}
+        className={`flex items-center gap-2 px-3 py-2 text-sm rounded-lg cursor-pointer transition-all duration-200 group ${isOver ? 'bg-primary/20 ring-2 ring-primary/50' : 'hover:bg-sidebar-accent/50'
+          }`}
         onClick={onToggle}
       >
-        <button className="p-0.5">
+        <button className="p-0.5" onClick={(e) => e.stopPropagation()}>
           {isExpanded ? (
             <ChevronDown className="h-3 w-3 text-muted-foreground" />
           ) : (
@@ -288,7 +283,7 @@ function DroppableFolder({
           <Trash2 className="h-3 w-3 text-muted-foreground hover:text-destructive" />
         </button>
       </div>
-      
+
       {isExpanded && (
         <div className="ml-4 pl-3 border-l border-border/50 space-y-1 py-1">
           {children}
@@ -301,7 +296,7 @@ function DroppableFolder({
       )}
     </div>
   );
-}
+});
 
 // Root drop zone (uncategorized)
 function RootDropZone({ children, isOver }: { children: React.ReactNode; isOver: boolean }) {
@@ -327,6 +322,7 @@ export const ConversationSidebar = memo(function ConversationSidebar({
   onCreateFolder,
   onDeleteFolder,
   onAssignFolder,
+  isStreaming,
 }: ConversationSidebarProps) {
   const navigate = useNavigate();
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -336,15 +332,19 @@ export const ConversationSidebar = memo(function ConversationSidebar({
   const [newFolderName, setNewFolderName] = useState('');
   const [newFolderColor, setNewFolderColor] = useState(FOLDER_COLORS[0].value);
   const [draggedConv, setDraggedConv] = useState<Conversation | null>(null);
-  
+
   const inputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
 
+  // Memoize sensors to prevent array recreation on each render
+  // Use the same sensor array always - DndContext has a 'disabled' prop we could use if needed
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: {
         distance: 8,
       },
+      // Disable during streaming by setting a very high activation distance
+      ...(isStreaming ? { activationConstraint: { distance: 9999 } } : {}),
     })
   );
 
@@ -442,8 +442,11 @@ export const ConversationSidebar = memo(function ConversationSidebar({
     }
   }, [onAssignFolder]);
 
-  // Get uncategorized conversations
-  const uncategorizedConvs = conversations.filter(c => !c.folderId);
+  // Memoize filtered conversations to prevent unnecessary array creation
+  const uncategorizedConvs = useMemo(() =>
+    conversations.filter(c => !c.folderId),
+    [conversations]
+  );
 
   // Droppable root zone
   const { isOver: isOverRoot, setNodeRef: setRootRef } = useDroppable({
@@ -451,7 +454,7 @@ export const ConversationSidebar = memo(function ConversationSidebar({
     data: { type: 'root' },
   });
 
-  const renderConversation = (conv: Conversation) => (
+  const renderConversation = useCallback((conv: Conversation) => (
     <DraggableConversation
       key={conv.id}
       conv={conv}
@@ -470,7 +473,7 @@ export const ConversationSidebar = memo(function ConversationSidebar({
       folders={folders}
       onAssignFolder={(folderId) => onAssignFolder(conv.id, folderId)}
     />
-  );
+  ), [activeId, editingId, editValue, onSelect, startEditing, saveEdit, cancelEdit, handleDelete, onExport, handleKeyDown, folders, onAssignFolder]);
 
   return (
     <DndContext
@@ -499,9 +502,8 @@ export const ConversationSidebar = memo(function ConversationSidebar({
 
       {/* Sidebar */}
       <aside
-        className={`fixed md:relative inset-y-0 left-0 z-40 w-64 h-full md:h-screen bg-sidebar border-r border-sidebar-border flex flex-col transition-transform duration-300 ease-out ${
-          isOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
-        }`}
+        className={`fixed md:relative inset-y-0 left-0 z-40 w-64 h-full md:h-screen bg-sidebar border-r border-sidebar-border flex flex-col transition-transform duration-300 ease-out ${isOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
+          }`}
         aria-label="Conversation sidebar"
       >
         {/* Top Actions Block */}
@@ -514,7 +516,7 @@ export const ConversationSidebar = memo(function ConversationSidebar({
             <Plus className="h-4 w-4" />
             New chat
           </button>
-          
+
           {onSearchOpen && (
             <button
               onClick={onSearchOpen}
@@ -529,11 +531,10 @@ export const ConversationSidebar = memo(function ConversationSidebar({
         </div>
 
         {/* Conversations Block - Scrollable */}
-        <nav 
+        <nav
           ref={setRootRef}
-          className={`flex-1 overflow-y-auto scrollbar-thin py-3 ${
-            isOverRoot ? 'bg-primary/5' : ''
-          }`} 
+          className={`flex-1 overflow-y-auto scrollbar-thin py-3 ${isOverRoot ? 'bg-primary/5' : ''
+            }`}
           aria-label="Conversations"
         >
           {/* Folders Section */}
@@ -569,9 +570,8 @@ export const ConversationSidebar = memo(function ConversationSidebar({
                     {FOLDER_COLORS.map(color => (
                       <button
                         key={color.value}
-                        className={`w-6 h-6 rounded-full ${color.value} transition-all ${
-                          newFolderColor === color.value ? 'ring-2 ring-offset-2 ring-offset-sidebar-accent ring-primary scale-110' : 'hover:scale-110'
-                        }`}
+                        className={`w-6 h-6 rounded-full ${color.value} transition-all ${newFolderColor === color.value ? 'ring-2 ring-offset-2 ring-offset-sidebar-accent ring-primary scale-110' : 'hover:scale-110'
+                          }`}
                         onClick={() => setNewFolderColor(color.value)}
                         title={color.name}
                       />
@@ -650,8 +650,17 @@ export const ConversationSidebar = memo(function ConversationSidebar({
           </div>
         </nav>
 
-        {/* Bottom Block - Settings */}
-        <div className="flex-shrink-0 p-3 border-t border-sidebar-border">
+        {/* Bottom Block - Tools & Settings */}
+        <div className="flex-shrink-0 p-3 border-t border-sidebar-border space-y-1">
+          <button
+            onClick={() => navigate('/transcribe')}
+            className="w-full flex items-center gap-3 px-3 py-2.5 text-sm rounded-xl hover:bg-sidebar-accent transition-colors text-sidebar-foreground group"
+            aria-label="Transcribe video"
+          >
+            <Video className="h-4 w-4 text-muted-foreground group-hover:text-violet-500 transition-colors" />
+            <span className="flex-1 text-left text-muted-foreground group-hover:text-foreground transition-colors">Transcribe Video</span>
+            <span className="px-1.5 py-0.5 text-[10px] bg-gradient-to-r from-violet-500/20 to-purple-500/20 rounded font-medium text-violet-500">New</span>
+          </button>
           <button
             onClick={() => navigate('/settings')}
             className="w-full flex items-center gap-3 px-3 py-2.5 text-sm rounded-xl hover:bg-sidebar-accent transition-colors text-sidebar-foreground group"

@@ -1,17 +1,18 @@
-import { useRef, useEffect, memo, useState } from 'react';
+import { useRef, useEffect, memo, useState, useMemo } from 'react';
 import { List, useDynamicRowHeight } from 'react-window';
 import type { RowComponentProps } from 'react-window';
 import { Message } from '@/types/chat';
 import { ChatMessage } from './ChatMessage';
 import { TypingIndicator } from './TypingIndicator';
 import { StreamingMessage } from './StreamingMessage';
+import { useStreamingStore } from '@/stores/streamingStore';
 
 interface VirtualizedMessageListProps {
   messages: Message[];
   isLoading: boolean;
-  streamingContent?: string;
   onRegenerate?: () => void;
   onEditMessage?: (messageId: string, newContent: string) => void;
+  conversationId?: string;
 }
 
 interface RowData {
@@ -43,7 +44,7 @@ const MessageRow = memo(function MessageRow({
   }
 
   return (
-    <div style={style} id={`message-${msg.id}`} className="message-container">
+    <div style={{ ...style, contentVisibility: 'auto' }} id={`message-${msg.id}`} className="message-container overflow-hidden">
       <ChatMessage
         message={msg}
         isLast={(isLastAssistant || isLastUserWithNoResponse) && !isLoading}
@@ -53,17 +54,25 @@ const MessageRow = memo(function MessageRow({
       />
     </div>
   );
+}, (prev, next) => {
+  return prev.index === next.index &&
+    prev.style.top === next.style.top &&
+    prev.style.height === next.style.height &&
+    prev.isLoading === next.isLoading &&
+    prev.messages[prev.index]?.content === next.messages[next.index]?.content;
 });
 
 export const VirtualizedMessageList = memo(function VirtualizedMessageList({
   messages,
   isLoading,
-  streamingContent,
   onRegenerate,
   onEditMessage,
+  conversationId,
 }: VirtualizedMessageListProps) {
+  const hasStreamingContent = useStreamingStore(state => !!state.streamingContent);
   const listRef = useRef<List<RowData>>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const lastStreamScrollRef = useRef(0);
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
 
   // Dynamic row heights
@@ -90,55 +99,119 @@ export const VirtualizedMessageList = memo(function VirtualizedMessageList({
     return () => observer.disconnect();
   }, []);
 
-  // Auto-scroll to bottom on new messages
+  // Auto-scroll to bottom on new messages or conversation switch
   useEffect(() => {
     if (messages.length > 0 && listRef.current) {
       listRef.current.scrollToRow(messages.length - 1);
     }
-  }, [messages.length]);
+  }, [messages.length, conversationId]);
 
-  // Scroll during streaming
+  // Scroll during streaming - use MutationObserver for reliable scrolling
   useEffect(() => {
-    if (isLoading && streamingContent && listRef.current) {
-      listRef.current.scrollToRow(messages.length - 1);
+    if (!isLoading || !listRef.current) return;
+
+    let isUserScrollingAway = false;
+    const list = listRef.current as unknown as { _outerRef?: HTMLElement };
+    // Capture outerRef at effect start to ensure we clean up the same element
+    const outerRef = list._outerRef;
+
+    // Immediately scroll to bottom when streaming starts
+    listRef.current.scrollToRow(messages.length - 1);
+
+    // Track user scroll events
+    const handleScroll = (e: Event) => {
+      const target = e.target as HTMLElement;
+      const distanceFromBottom = target.scrollHeight - target.scrollTop - target.clientHeight;
+      // User is considered scrolling away if more than 200px from bottom
+      isUserScrollingAway = distanceFromBottom > 200;
+    };
+
+    if (outerRef) {
+      outerRef.addEventListener('scroll', handleScroll, { passive: true });
     }
-  }, [streamingContent, isLoading, messages.length]);
+
+    // Use MutationObserver to detect content changes and scroll
+    const observer = new MutationObserver(() => {
+      if (!listRef.current || isUserScrollingAway) return;
+      requestAnimationFrame(() => {
+        listRef.current?.scrollToRow(messages.length - 1);
+      });
+    });
+
+    // Observe the container if it exists
+    if (outerRef) {
+      observer.observe(outerRef, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+      });
+    }
+
+    // Backup interval in case MutationObserver misses updates
+    const backupInterval = setInterval(() => {
+      if (!listRef.current || isUserScrollingAway) return;
+      if (outerRef) {
+        const distanceFromBottom = outerRef.scrollHeight - outerRef.scrollTop - outerRef.clientHeight;
+        if (distanceFromBottom > 10) {
+          listRef.current.scrollToRow(messages.length - 1);
+        }
+      }
+    }, 100);
+
+    return () => {
+      observer.disconnect();
+      clearInterval(backupInterval);
+      if (outerRef) {
+        outerRef.removeEventListener('scroll', handleScroll);
+      }
+    };
+  }, [isLoading, messages.length]);
 
   // Scroll when streaming completes
   useEffect(() => {
     if (!isLoading && messages.length > 0 && listRef.current) {
       setTimeout(() => {
         listRef.current?.scrollToRow(messages.length - 1);
-      }, 100);
+      }, 50);
     }
   }, [isLoading, messages.length]);
 
   // Show typing indicator when waiting for first chunk
-  const showTyping = isLoading && !streamingContent && messages[messages.length - 1]?.content === '';
+  const showTyping = isLoading && !hasStreamingContent && messages[messages.length - 1]?.content === '';
+
+  // Memoize rowProps to prevent re-renders when other props don't change
+  const rowProps = useMemo(() => ({
+    messages,
+    isLoading,
+    onRegenerate,
+    onEditMessage,
+  }), [messages, isLoading, onRegenerate, onEditMessage]);
+
+  // Memoize height to avoid re-renders of the List when streamingContent updates but stays non-empty
+  const listHeight = useMemo(() => {
+    const streamingOffset = (isLoading && hasStreamingContent) ? 150 : 0;
+    const typingOffset = showTyping ? 60 : 0;
+    return dimensions.height - streamingOffset - typingOffset;
+  }, [dimensions.height, isLoading, !!hasStreamingContent, showTyping]);
 
   return (
     <div ref={containerRef} className="flex-1 relative overflow-hidden">
       {dimensions.height > 0 && (
         <List
           ref={listRef}
-          height={dimensions.height - (isLoading && streamingContent ? 150 : 0) - (showTyping ? 60 : 0)}
+          height={listHeight}
           width={dimensions.width}
           rowCount={messages.length}
           rowHeight={dynamicRowHeight}
           rowComponent={MessageRow}
-          rowProps={{
-            messages,
-            isLoading,
-            onRegenerate,
-            onEditMessage,
-          }}
+          rowProps={rowProps}
           className="scrollbar-thin"
         />
       )}
       {/* Streaming message - shown separately from virtualized list */}
-      {isLoading && streamingContent && (
+      {isLoading && hasStreamingContent && (
         <div className="absolute bottom-0 left-0 right-0 bg-background border-t border-border">
-          <StreamingMessage content={streamingContent} />
+          <StreamingMessage />
         </div>
       )}
       {/* Typing indicator when waiting for first chunk */}

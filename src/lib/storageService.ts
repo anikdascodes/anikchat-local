@@ -128,6 +128,10 @@ class FileSystemStorage {
   private dataHandle: FileSystemDirectoryHandle | null = null;
   private handleStore = new IndexedDBStorage('anikchat-handles');
 
+  // Optimization E: In-memory cache for lightning fast reads from slow USB sticks
+  private cache = new Map<string, { data: unknown; timestamp: number }>();
+  private readonly CACHE_TTL = 30000; // 30 seconds
+
   async init(): Promise<boolean> {
     try {
       await this.handleStore.init();
@@ -190,6 +194,7 @@ class FileSystemStorage {
     await this.dataHandle.getDirectoryHandle('media', { create: true });
     await this.dataHandle.getDirectoryHandle('embeddings', { create: true });
     await this.dataHandle.getDirectoryHandle('summaries', { create: true });
+    await this.dataHandle.getDirectoryHandle('debug', { create: true });
   }
 
   async clearHandle(): Promise<void> {
@@ -216,11 +221,21 @@ class FileSystemStorage {
   }
 
   async getJSON<T>(subdir: string, filename: string): Promise<T | null> {
+    const cacheKey = `${subdir}/${filename}`;
+    const cached = this.cache.get(cacheKey);
+    if (cached && (Date.now() - cached.timestamp < this.CACHE_TTL)) {
+      return cached.data as T;
+    }
+
     try {
       const dir = await this.getSubDir(subdir);
       const fileHandle = await dir.getFileHandle(`${filename}.json`);
       const file = await fileHandle.getFile();
-      return JSON.parse(await file.text());
+      const data = JSON.parse(await file.text());
+
+      // Update cache
+      this.cache.set(cacheKey, { data, timestamp: Date.now() });
+      return data;
     } catch (e) {
       if ((e as Error).name === 'NotFoundError') return null;
       throw e;
@@ -228,6 +243,9 @@ class FileSystemStorage {
   }
 
   async setJSON<T>(subdir: string, filename: string, data: T): Promise<void> {
+    const cacheKey = `${subdir}/${filename}`;
+    this.cache.set(cacheKey, { data, timestamp: Date.now() });
+
     const dir = await this.getSubDir(subdir);
     const fileHandle = await dir.getFileHandle(`${filename}.json`, { create: true });
     const writable = await fileHandle.createWritable();
@@ -239,8 +257,13 @@ class FileSystemStorage {
     try {
       const dir = await this.getSubDir(subdir);
       await dir.removeEntry(`${filename}.json`);
-    } catch {
-      // File not found, ignore
+      // Clear from cache
+      this.cache.delete(`${subdir}/${filename}`);
+    } catch (e) {
+      // File not found is expected, only log unexpected errors
+      if ((e as Error).name !== 'NotFoundError') {
+        logger.debug(`deleteJSON error for ${subdir}/${filename}:`, e);
+      }
     }
   }
 
@@ -254,7 +277,8 @@ class FileSystemStorage {
         }
       }
       return files;
-    } catch {
+    } catch (e) {
+      logger.debug(`listFiles error for ${subdir}:`, e);
       return [];
     }
   }
@@ -273,7 +297,10 @@ class FileSystemStorage {
       const dir = await this.getSubDir('media');
       const fileHandle = await dir.getFileHandle(filename);
       return await fileHandle.getFile();
-    } catch {
+    } catch (e) {
+      if ((e as Error).name !== 'NotFoundError') {
+        logger.debug(`getMedia error for ${filename}:`, e);
+      }
       return null;
     }
   }
@@ -282,8 +309,10 @@ class FileSystemStorage {
     try {
       const dir = await this.getSubDir('media');
       await dir.removeEntry(filename);
-    } catch {
-      // File not found, ignore
+    } catch (e) {
+      if ((e as Error).name !== 'NotFoundError') {
+        logger.debug(`deleteMedia error for ${filename}:`, e);
+      }
     }
   }
 
@@ -309,7 +338,15 @@ class FileSystemStorage {
 // Config (API keys, models) → always in IndexedDB (browser persistent)
 // Chat data → user's local folder via File System API
 class StorageService {
+  /**
+   * The currently-active backend used for reads/writes.
+   * This should always be a working backend (fallback to IndexedDB when FS is disconnected).
+   */
   private type: StorageType = 'indexeddb';
+  /**
+   * The user-selected storage type (persisted). May be 'filesystem' even if not currently connected.
+   */
+  private selectedType: StorageType | null = null;
   private idb = new IndexedDBStorage();          // For config (persistent)
   private configIdb = new IndexedDBStorage('anikchat-config-db'); // Dedicated config store
   private fs = new FileSystemStorage();          // For chat data
@@ -323,17 +360,16 @@ class StorageService {
     this.initPromise = (async () => {
       // Always init config DB (browser persistent)
       await this.configIdb.init();
-      
+      // Always init chat IndexedDB too as a safe fallback.
+      await this.idb.init();
+
       const savedType = localStorage.getItem('anikchat-storage-type') as StorageType | null;
-      
+      this.selectedType = savedType;
+
       if (savedType === 'filesystem' && isFileSystemSupported()) {
         const connected = await this.fs.init();
         this.type = connected ? 'filesystem' : 'indexeddb';
-        if (!connected && this.fs.hasSavedHandle()) {
-          this.type = 'filesystem';
-        }
       } else {
-        await this.idb.init();
         this.type = 'indexeddb';
       }
       this.initialized = true;
@@ -347,15 +383,20 @@ class StorageService {
   }
 
   needsReauthorization(): boolean {
-    return this.type === 'filesystem' && !this.fs.isConnected() && this.fs.hasSavedHandle();
+    return this.selectedType === 'filesystem' && isFileSystemSupported() && !this.fs.isConnected() && this.fs.hasSavedHandle();
   }
 
   async reauthorize(): Promise<boolean> {
-    return this.fs.reauthorize();
+    await this.init();
+    const ok = await this.fs.reauthorize();
+    // Always fall back to IndexedDB if we can't regain permission.
+    this.type = ok ? 'filesystem' : 'indexeddb';
+    return ok;
   }
 
   getStorageType(): StorageType {
-    return this.type;
+    // UI: show the selected type if the user picked one, even if we are temporarily falling back.
+    return this.selectedType ?? this.type;
   }
 
   isFileSystemConnected(): boolean {
@@ -372,6 +413,7 @@ class StorageService {
     if (success) {
       await this.migrateToFileSystem();
       this.type = 'filesystem';
+      this.selectedType = 'filesystem';
       localStorage.setItem('anikchat-storage-type', 'filesystem');
     }
     return success;
@@ -380,6 +422,7 @@ class StorageService {
   async switchToIndexedDB(): Promise<void> {
     await this.idb.init();
     this.type = 'indexeddb';
+    this.selectedType = 'indexeddb';
     localStorage.setItem('anikchat-storage-type', 'indexeddb');
   }
 
@@ -387,6 +430,7 @@ class StorageService {
     await this.fs.clearHandle();
     await this.idb.init();
     this.type = 'indexeddb';
+    this.selectedType = 'indexeddb';
     localStorage.setItem('anikchat-storage-type', 'indexeddb');
   }
 
@@ -394,38 +438,18 @@ class StorageService {
     const convData = localStorage.getItem('openchat-conversations');
     if (convData) {
       try {
-        const convs = JSON.parse(convData);
-        for (const conv of convs) {
-          await this.fs.setJSON('conversations', conv.id, conv);
-        }
-      } catch {
+        const parsed: unknown = JSON.parse(convData);
+        if (!Array.isArray(parsed)) return;
+        const convs = parsed as Array<{ id?: unknown } & Record<string, unknown>>;
+        // Optimization: Parallelize migration
+        await Promise.all(
+          convs
+            .filter((conv) => typeof conv.id === 'string' && conv.id.length > 0)
+            .map((conv) => this.fs.setJSON('conversations', conv.id as string, conv))
+        );
+      } catch (e) {
         logger.debug('Migration: no localStorage conversations');
       }
-    }
-
-    const configData = localStorage.getItem('openchat-config');
-    if (configData) {
-      try {
-        await this.fs.setJSON('', 'config', JSON.parse(configData));
-      } catch {
-        logger.debug('Migration: no localStorage config');
-      }
-    }
-
-    try {
-      const keys = await this.idb.getAllKeys();
-      for (const key of keys) {
-        const value = await this.idb.get(key);
-        if (key.startsWith('conv-')) {
-          await this.fs.setJSON('conversations', key.replace('conv-', ''), value);
-        } else if (key.startsWith('emb-')) {
-          await this.fs.setJSON('embeddings', key.replace('emb-', ''), value);
-        } else if (key.startsWith('summary-')) {
-          await this.fs.setJSON('summaries', key.replace('summary-', ''), value);
-        }
-      }
-    } catch {
-      logger.debug('Migration: no IndexedDB data');
     }
   }
 

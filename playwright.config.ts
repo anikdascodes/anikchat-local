@@ -8,7 +8,8 @@ export default defineConfig({
     workers: process.env.CI ? 1 : undefined,
     reporter: 'html',
     use: {
-        baseURL: 'http://localhost:8080',
+        // Use the existing dev server (Vite default).
+        baseURL: 'http://localhost:5173',
         trace: 'on-first-retry',
     },
     projects: [
@@ -25,9 +26,6 @@ export default defineConfig({
         //   use: { ...devices['Desktop Safari'] },
         // },
     ],
-    webServer: {
-        command: 'npm run dev',
-        url: 'http://localhost:8080',
-        reuseExistingServer: !process.env.CI,
-    },
+    // NOTE: We intentionally do not start a webServer here.
+    // Run `npm run dev` separately (or use your existing terminal), then run Playwright.
 });

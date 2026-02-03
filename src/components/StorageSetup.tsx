@@ -15,6 +15,9 @@ export function StorageSetup({ onComplete, isFirstTime = true }: StorageSetupPro
   const [selectedType, setSelectedType] = useState<StorageType | null>(null);
   const fsSupported = isFileSystemSupported();
 
+  useEffect(() => {
+  }, []);
+
   const handleSelectFolder = async () => {
     setIsLoading(true);
     try {
@@ -157,7 +160,7 @@ export function StorageSetup({ onComplete, isFirstTime = true }: StorageSetupPro
 
 // Compact version for settings page
 export function StorageSelector() {
-  const [storageType, setStorageType] = useState<StorageType>('localstorage');
+  const [storageType, setStorageType] = useState<StorageType>('indexeddb');
   const [directoryName, setDirectoryName] = useState<string | null>(null);
   const [storageSize, setStorageSize] = useState<number>(0);
   const [isLoading, setIsLoading] = useState(false);

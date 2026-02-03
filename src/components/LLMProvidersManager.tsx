@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
-import { Plus, Trash2, Eye, EyeOff, ChevronDown, ChevronRight, Check, Server, Cpu, Loader2, Zap, Shield } from 'lucide-react';
+import { Plus, Trash2, Eye, EyeOff, ChevronDown, ChevronRight, Check, Server, Cpu, Loader2, Zap, Shield, Mic } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -17,6 +17,7 @@ import {
 import { APIConfig, LLMProvider, LLMModel, generateId } from '@/types/chat';
 import { toast } from 'sonner';
 import { encryptApiKey, decryptApiKey, isEncrypted } from '@/lib/crypto';
+import { detectProviderType } from '@/lib/providerUtils';
 
 // Pre-configured providers with their base URLs
 const PRESET_PROVIDERS = [
@@ -121,12 +122,13 @@ export function LLMProvidersManager({ config, onConfigChange }: LLMProvidersMana
     toast.success('Provider deleted');
   }, [config, providers, onConfigChange]);
 
-  const addModel = useCallback((providerId: string) => {
+  const addModel = useCallback((providerId: string, category: 'llm' | 'audio' = 'llm') => {
     const newModel: LLMModel = {
       id: generateId(),
       modelId: '',
-      displayName: 'New Model',
+      displayName: category === 'audio' ? 'New Audio Model' : 'New Model',
       isVisionModel: false,
+      modelCategory: category,
     };
     onConfigChange({
       ...config,
@@ -136,7 +138,7 @@ export function LLMProvidersManager({ config, onConfigChange }: LLMProvidersMana
           : p
       ),
     });
-    toast.success('Model added');
+    toast.success(category === 'audio' ? 'Audio model added' : 'Model added');
   }, [config, providers, onConfigChange]);
 
   const updateModel = useCallback((providerId: string, modelId: string, updates: Partial<LLMModel>) => {
@@ -210,39 +212,67 @@ export function LLMProvidersManager({ config, onConfigChange }: LLMProvidersMana
       return;
     }
 
+    // Find first LLM model (not audio) for testing
+    const llmModel = provider.models.find(m => m.modelCategory !== 'audio');
+
+    if (!llmModel) {
+      // Only audio models exist - just verify API key works with a simple request
+      toast.info('Audio models cannot be tested directly. API key will be validated on first transcription.');
+      return;
+    }
+
     setTestingProvider(providerId);
-    const model = provider.models[0];
+    const model = llmModel;
     const baseUrl = provider.baseUrl.replace(/\/+$/, '');
+    const providerType = detectProviderType(provider.baseUrl);
 
     try {
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-      if (provider.apiKey) {
-        headers['Authorization'] = `Bearer ${provider.apiKey}`;
-      }
-
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 15000);
 
-      const response = await fetch(`${baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          model: model.modelId,
-          messages: [{ role: 'user', content: 'Hi' }],
-          max_tokens: 5,
-        }),
-        signal: controller.signal,
-      });
+      const response = providerType === 'anthropic'
+        ? await fetch(`${baseUrl}/messages`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'anthropic-version': '2023-06-01',
+            ...(provider.apiKey ? { 'x-api-key': provider.apiKey } : {}),
+          },
+          body: JSON.stringify({
+            model: model.modelId,
+            max_tokens: 5,
+            messages: [{ role: 'user', content: [{ type: 'text', text: 'Hi' }] }],
+          }),
+          signal: controller.signal,
+        })
+        : await fetch(`${baseUrl}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(provider.apiKey ? { Authorization: `Bearer ${provider.apiKey}` } : {}),
+          },
+          body: JSON.stringify({
+            model: model.modelId,
+            messages: [{ role: 'user', content: 'Hi' }],
+            max_tokens: 5,
+          }),
+          signal: controller.signal,
+        });
 
       clearTimeout(timeoutId);
 
       if (response.ok) {
         toast.success(`${provider.name} connection successful!`);
       } else {
-        const errorData = await response.json().catch(() => ({}));
-        const errorMsg = (errorData.error as any)?.message || `Error ${response.status}`;
+        const errorData: unknown = await response.json().catch(() => null);
+        const errorMsg = (() => {
+          if (!errorData || typeof errorData !== 'object') return `Error ${response.status}`;
+          const maybe = errorData as { error?: { message?: unknown }; message?: unknown };
+          const fromNested = maybe.error?.message;
+          if (typeof fromNested === 'string' && fromNested) return fromNested;
+          if (typeof maybe.message === 'string' && maybe.message) return maybe.message;
+          return `Error ${response.status}`;
+        })();
 
         if (response.status === 401) {
           toast.error('Invalid API key');
@@ -431,15 +461,24 @@ export function LLMProvidersManager({ config, onConfigChange }: LLMProvidersMana
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
                     <Label className="text-sm font-medium">Models</Label>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => addModel(provider.id)}
-                      className="gap-1"
-                    >
-                      <Plus className="h-3 w-3" />
-                      Add Model
-                    </Button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="outline" size="sm" className="gap-1">
+                          <Plus className="h-3 w-3" />
+                          Add Model
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => addModel(provider.id, 'llm')} className="cursor-pointer">
+                          <Cpu className="h-4 w-4 mr-2" />
+                          LLM Model (Chat)
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => addModel(provider.id, 'audio')} className="cursor-pointer">
+                          <Mic className="h-4 w-4 mr-2" />
+                          Audio Model (Transcription)
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </div>
 
                   {provider.models.length === 0 ? (
@@ -450,26 +489,43 @@ export function LLMProvidersManager({ config, onConfigChange }: LLMProvidersMana
                     <div className="space-y-2">
                       {provider.models.map((model) => {
                         const isActive = config.activeProviderId === provider.id && config.activeModelId === model.id;
+                        const isAudioModel = model.modelCategory === 'audio';
 
                         return (
                           <div
                             key={model.id}
                             className={`p-3 rounded-lg border transition-all ${isActive
                               ? 'border-green-500 bg-green-500/5'
-                              : 'border-border hover:border-primary/50'
+                              : isAudioModel
+                                ? 'border-violet-500/30 bg-violet-500/5 hover:border-violet-500/50'
+                                : 'border-border hover:border-primary/50'
                               }`}
                           >
                             <div className="flex items-start gap-3">
-                              <Cpu className={`h-4 w-4 mt-1 ${isActive ? 'text-green-500' : 'text-muted-foreground'}`} />
+                              {isAudioModel ? (
+                                <Mic className={`h-4 w-4 mt-1 ${isActive ? 'text-green-500' : 'text-violet-500'}`} />
+                              ) : (
+                                <Cpu className={`h-4 w-4 mt-1 ${isActive ? 'text-green-500' : 'text-muted-foreground'}`} />
+                              )}
 
                               <div className="flex-1 grid gap-3">
+                                {/* Model Category Badge */}
+                                <div className="flex items-center gap-2">
+                                  <span className={`px-2 py-0.5 text-xs rounded-full font-medium ${isAudioModel
+                                    ? 'bg-violet-500/20 text-violet-500'
+                                    : 'bg-blue-500/20 text-blue-500'
+                                    }`}>
+                                    {isAudioModel ? 'Audio' : 'LLM'}
+                                  </span>
+                                </div>
+
                                 <div className="grid grid-cols-2 gap-2">
                                   <div className="space-y-1">
                                     <Label className="text-xs">Display Name</Label>
                                     <Input
                                       value={model.displayName}
                                       onChange={(e) => updateModel(provider.id, model.id, { displayName: e.target.value })}
-                                      placeholder="GPT-4o"
+                                      placeholder={isAudioModel ? "Whisper Large v3" : "GPT-4o"}
                                       className="h-8 text-sm"
                                     />
                                   </div>
@@ -478,38 +534,46 @@ export function LLMProvidersManager({ config, onConfigChange }: LLMProvidersMana
                                     <Input
                                       value={model.modelId}
                                       onChange={(e) => updateModel(provider.id, model.id, { modelId: e.target.value })}
-                                      placeholder="gpt-4o"
+                                      placeholder={isAudioModel ? "Whisper-Large-v3" : "gpt-4o"}
                                       className="h-8 text-sm font-mono"
                                     />
                                   </div>
                                 </div>
 
                                 <div className="flex items-center justify-between">
-                                  <div className="flex items-center gap-2">
-                                    <Switch
-                                      checked={model.isVisionModel}
-                                      onCheckedChange={(checked) => updateModel(provider.id, model.id, { isVisionModel: checked })}
-                                    />
-                                    <Label className="text-xs text-muted-foreground">Vision capable</Label>
-                                  </div>
+                                  {!isAudioModel ? (
+                                    <div className="flex items-center gap-2">
+                                      <Switch
+                                        checked={model.isVisionModel}
+                                        onCheckedChange={(checked) => updateModel(provider.id, model.id, { isVisionModel: checked })}
+                                      />
+                                      <Label className="text-xs text-muted-foreground">Vision capable</Label>
+                                    </div>
+                                  ) : (
+                                    <div className="text-xs text-muted-foreground">
+                                      Used for video/audio transcription
+                                    </div>
+                                  )}
 
                                   <div className="flex items-center gap-2">
-                                    <Button
-                                      variant={isActive ? "default" : "outline"}
-                                      size="sm"
-                                      onClick={() => activateModel(provider.id, model.id)}
-                                      className="gap-1"
-                                      disabled={isActive}
-                                    >
-                                      {isActive ? (
-                                        <>
-                                          <Check className="h-3 w-3" />
-                                          Active
-                                        </>
-                                      ) : (
-                                        'Activate'
-                                      )}
-                                    </Button>
+                                    {!isAudioModel && (
+                                      <Button
+                                        variant={isActive ? "default" : "outline"}
+                                        size="sm"
+                                        onClick={() => activateModel(provider.id, model.id)}
+                                        className="gap-1"
+                                        disabled={isActive}
+                                      >
+                                        {isActive ? (
+                                          <>
+                                            <Check className="h-3 w-3" />
+                                            Active
+                                          </>
+                                        ) : (
+                                          'Activate'
+                                        )}
+                                      </Button>
+                                    )}
                                     <Button
                                       variant="ghost"
                                       size="sm"

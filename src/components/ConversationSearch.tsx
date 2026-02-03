@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect } from 'react';
 import { Search, X, MessageSquare } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Conversation } from '@/types/chat';
-import { searchConversations, SearchResult, highlightMatch } from '@/lib/searchService';
+import { searchConversations, SearchResult, getHighlightParts } from '@/lib/searchService';
 import { useDebounce } from '@/hooks/useDebounce';
 
 interface ConversationSearchProps {
@@ -108,10 +108,17 @@ export function ConversationSearch({ conversations, onSelectConversation, isOpen
                   {result.role === 'user' ? 'You' : 'Assistant'}
                 </span>
               </div>
-              <p 
-                className="text-sm text-muted-foreground line-clamp-2 [&_mark]:bg-yellow-200 [&_mark]:dark:bg-yellow-800"
-                dangerouslySetInnerHTML={{ __html: highlightMatch(result.matchSnippet, query) }}
-              />
+              <p className="text-sm text-muted-foreground line-clamp-2 [&_mark]:bg-yellow-200 [&_mark]:dark:bg-yellow-800">
+                {getHighlightParts(result.matchSnippet, query).map((part, partIdx) =>
+                  part.isMatch ? (
+                    <mark key={partIdx} className="rounded px-0.5">
+                      {part.text}
+                    </mark>
+                  ) : (
+                    <span key={partIdx}>{part.text}</span>
+                  )
+                )}
+              </p>
             </button>
           ))}
         </div>

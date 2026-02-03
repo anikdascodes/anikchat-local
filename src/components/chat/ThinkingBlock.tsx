@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { ChevronDown, ChevronRight, Brain } from 'lucide-react';
 import { MarkdownRenderer } from '../MarkdownRenderer';
 
@@ -7,7 +8,7 @@ interface ThinkingBlockProps {
   onToggle: () => void;
 }
 
-export function ThinkingBlock({ thinking, isExpanded, onToggle }: ThinkingBlockProps) {
+export const ThinkingBlock = memo(function ThinkingBlock({ thinking, isExpanded, onToggle }: ThinkingBlockProps) {
   return (
     <div className="mb-3">
       <button
@@ -28,4 +29,4 @@ export function ThinkingBlock({ thinking, isExpanded, onToggle }: ThinkingBlockP
       )}
     </div>
   );
-}
+});

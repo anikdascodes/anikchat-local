@@ -7,6 +7,7 @@ import { APIConfig, Conversation, defaultConfig } from '@/types/chat';
 import { useConfig } from '@/hooks/useConfig';
 import { storageService } from '@/lib/storageService';
 import { toast } from 'sonner';
+import { redactConfigForExport } from '@/lib/exportRedaction';
 import {
   AppearanceSettings,
   ApiSettings,
@@ -26,11 +27,12 @@ function Settings() {
     const loadConversations = async () => {
       try {
         const ids = await storageService.listConversations();
-        const convs: Conversation[] = [];
-        for (const id of ids) {
-          const conv = await storageService.getConversation<Conversation>(id);
-          if (conv) convs.push(conv);
-        }
+        
+        // Optimization: Parallel load conversations
+        const convs = (await Promise.all(
+          ids.map(id => storageService.getConversation<Conversation>(id))
+        )).filter((c): c is Conversation => !!c);
+
         convs.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
         setConversations(convs);
       } catch {
@@ -54,7 +56,7 @@ function Settings() {
 
   const handleExportAllData = useCallback(() => {
     const data = {
-      config,
+      config: redactConfigForExport(config),
       conversations,
       exportedAt: new Date().toISOString(),
     };
@@ -65,7 +67,7 @@ function Settings() {
     a.download = `anikchat-backup-${new Date().toISOString().split('T')[0]}.json`;
     a.click();
     URL.revokeObjectURL(url);
-    toast.success('Data exported successfully');
+    toast.success('Data exported (API keys not included)');
   }, [config, conversations]);
 
   const handleDeleteConversation = useCallback(async (id: string) => {

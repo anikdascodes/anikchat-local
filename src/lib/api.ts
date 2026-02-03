@@ -39,6 +39,32 @@ export interface StreamOptions {
   signal?: AbortSignal;
 }
 
+function combineAbortSignals(signals: Array<AbortSignal | undefined>): AbortSignal {
+  const controller = new AbortController();
+
+  const onAbort = () => controller.abort();
+
+  for (const s of signals) {
+    if (!s) continue;
+    if (s.aborted) {
+      controller.abort();
+      break;
+    }
+    s.addEventListener('abort', onAbort, { once: true });
+  }
+
+  return controller.signal;
+}
+
+function getErrorMessage(errorData: unknown): string | undefined {
+  if (!errorData || typeof errorData !== 'object') return undefined;
+  const maybe = errorData as { error?: { message?: unknown }; message?: unknown };
+  const nested = maybe.error?.message;
+  if (typeof nested === 'string' && nested) return nested;
+  if (typeof maybe.message === 'string' && maybe.message) return maybe.message;
+  return undefined;
+}
+
 /**
  * Parse API errors and return user-friendly messages
  */
@@ -167,7 +193,9 @@ export async function streamChat(options: StreamOptions): Promise<void> {
   };
 
   for (const msg of contextResult.messages) {
-    const originalMsg = messages.find((m) => m.content === msg.content);
+    const originalMsg = msg.sourceMessageId
+      ? messages.find((m) => m.id === msg.sourceMessageId)
+      : undefined;
     const hasImages = originalMsg?.images && originalMsg.images.length > 0;
 
     if (hasImages) {
@@ -240,6 +268,7 @@ export async function streamChat(options: StreamOptions): Promise<void> {
   const isGeminiNative = providerType === 'google-native';
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const requestSignal = combineAbortSignals([signal, controller.signal]);
 
   // Check if this request has images (for SambaNova token limit)
   const hasImagesInRequest = apiMessages.some(msg =>
@@ -287,11 +316,170 @@ export async function streamChat(options: StreamOptions): Promise<void> {
       requestBody.presence_penalty = config.presencePenalty;
     }
 
+    if (isAnthropic) {
+      // Anthropic native Messages API: https://docs.anthropic.com/en/api/messages
+      const systemText = apiMessages
+        .filter(m => m.role === 'system')
+        .map(m => (typeof m.content === 'string' ? m.content : ''))
+        .filter(Boolean)
+        .join('\n\n');
+
+      const anthropicMessages = apiMessages
+        .filter(m => m.role !== 'system')
+        .map((m) => {
+          type MixedBlock = AnthropicTextContent | AnthropicImageContent | OpenAITextContent | OpenAIImageContent;
+
+          const blocks: MixedBlock[] = Array.isArray(m.content)
+            ? (m.content as MixedBlock[])
+            : [{ type: 'text', text: String(m.content) }];
+
+          // Normalize into Anthropic blocks (text + image only).
+          const content: (AnthropicTextContent | AnthropicImageContent)[] = [];
+          for (const b of blocks) {
+            if (b.type === 'text') {
+              content.push({ type: 'text', text: String((b as AnthropicTextContent | OpenAITextContent).text ?? '') });
+              continue;
+            }
+            if (b.type === 'image') {
+              content.push(b);
+              continue;
+            }
+            if (b.type === 'image_url') {
+              const url = b.image_url?.url ?? '';
+              const { mimeType, base64 } = parseDataUrl(url);
+              content.push({
+                type: 'image',
+                source: { type: 'base64', media_type: mimeType, data: base64 },
+              });
+              continue;
+            }
+          }
+
+          return {
+            role: m.role === 'assistant' ? 'assistant' : 'user',
+            content: content.length > 0 ? content : [{ type: 'text', text: '' }],
+          };
+        });
+
+      const anthropicHeaders: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'anthropic-version': '2023-06-01',
+      };
+      if (provider.apiKey) anthropicHeaders['x-api-key'] = provider.apiKey;
+
+      const anthropicBody: Record<string, unknown> = {
+        model: model.modelId,
+        max_tokens: config.maxTokens,
+        temperature: config.temperature,
+        stream: true,
+        messages: anthropicMessages,
+      };
+      if (systemText) anthropicBody.system = systemText;
+      // Anthropic supports top_p, but not frequency/presence penalties.
+      if (typeof config.topP === 'number') anthropicBody.top_p = config.topP;
+
+      const response = await fetch(`${baseUrl}/messages`, {
+        method: 'POST',
+        headers: anthropicHeaders,
+        body: JSON.stringify(anthropicBody),
+        signal: requestSignal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorData: unknown = await response.json().catch(() => null);
+        throw new Error(getErrorMessage(errorData) || `API Error (${response.status})`);
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('No response body received from the API');
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let hasReceivedContent = false;
+
+      const readWithTimeout = async (): Promise<ReadableStreamReadResult<Uint8Array>> => {
+        return new Promise((resolve, reject) => {
+          const timeoutId = setTimeout(() => {
+            reader.cancel();
+            reject(new Error('CHUNK_TIMEOUT'));
+          }, CHUNK_TIMEOUT_MS);
+
+          reader.read().then((result) => {
+            clearTimeout(timeoutId);
+            resolve(result);
+          }).catch((err) => {
+            clearTimeout(timeoutId);
+            reject(err);
+          });
+        });
+      };
+
+      while (true) {
+        let readResult: ReadableStreamReadResult<Uint8Array>;
+        try {
+          readResult = await readWithTimeout();
+        } catch (timeoutError) {
+          if (timeoutError instanceof Error && timeoutError.message === 'CHUNK_TIMEOUT') {
+            if (hasReceivedContent) {
+              onChunk('\n\n[Response stopped - the AI model stopped responding. The partial response is shown above.]');
+              onComplete();
+              return;
+            }
+            throw new Error('The AI model is not responding. This could be due to high server load or network issues. Please try again.');
+          }
+          throw timeoutError;
+        }
+
+        const { done, value } = readResult;
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith(':') || line.trim() === '') continue;
+          if (!line.startsWith('data: ')) continue;
+
+          const data = line.slice(6).trim();
+          try {
+            const parsed = JSON.parse(data);
+            if (parsed.type === 'error') {
+              throw new Error(parsed.error?.message || 'Stream error occurred');
+            }
+            if (parsed.type === 'content_block_delta') {
+              const text = parsed.delta?.text;
+              if (typeof text === 'string' && text.length > 0) {
+                hasReceivedContent = true;
+                onChunk(text);
+              }
+            }
+            if (parsed.type === 'message_stop') {
+              onComplete();
+              return;
+            }
+          } catch (parseError) {
+            if (parseError instanceof SyntaxError) continue;
+            throw parseError;
+          }
+        }
+      }
+
+      if (!hasReceivedContent) {
+        throw new Error('The AI model returned an empty response. This might be a temporary issue - please try again.');
+      }
+
+      onComplete();
+      return;
+    }
+
     const response = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers,
       body: JSON.stringify(requestBody),
-      signal: signal || controller.signal,
+      signal: requestSignal,
     });
 
     clearTimeout(timeoutId);
@@ -326,8 +514,18 @@ export async function streamChat(options: StreamOptions): Promise<void> {
       });
     };
 
+    let lastYieldTime = performance.now();
+
     while (true) {
       let readResult: ReadableStreamReadResult<Uint8Array>;
+
+      // CPU Yielding: If we've been processing chunks for more than 16ms (one frame),
+      // yield back to the browser to prevent UI freezing.
+      const now = performance.now();
+      if (now - lastYieldTime > 16) {
+        await new Promise(resolve => setTimeout(resolve, 0));
+        lastYieldTime = performance.now();
+      }
 
       try {
         readResult = await readWithTimeout();
@@ -453,14 +651,52 @@ export async function summarizeMessages({
 
   const prompt = createSummarizationPrompt(messages, existingSummary);
   const baseUrl = provider.baseUrl.replace(/\/+$/, '');
+  const providerType = detectProviderType(provider.baseUrl);
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), CHUNK_TIMEOUT_MS);
+  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
   try {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
+      if (providerType === 'anthropic') {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'anthropic-version': '2023-06-01',
+      };
+      if (provider.apiKey) headers['x-api-key'] = provider.apiKey;
+
+      const response = await fetch(`${baseUrl}/messages`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          model: model.modelId,
+          max_tokens: 2000,
+          temperature: 0.3,
+          system: 'You are a helpful assistant that creates concise, informative summaries of conversations.',
+          messages: [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
+        }),
+        signal: combineAbortSignals([signal, controller.signal]),
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorData: unknown = await response.json().catch(() => null);
+        throw new Error(getErrorMessage(errorData) || `API Error (${response.status})`);
+      }
+
+      const data: unknown = await response.json();
+      const blocks =
+        data && typeof data === 'object' && Array.isArray((data as { content?: unknown }).content)
+          ? ((data as { content: unknown[] }).content as Array<{ type?: unknown; text?: unknown }>)
+          : [];
+      const text = blocks
+        .filter((b) => b?.type === 'text')
+        .map((b) => (typeof b.text === 'string' ? b.text : ''))
+        .join('');
+      return text || '';
+    }
+
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
 
     if (provider.apiKey) {
       headers['Authorization'] = `Bearer ${provider.apiKey}`;
@@ -478,7 +714,7 @@ export async function summarizeMessages({
         temperature: 0.3,
         max_tokens: 2000,
       }),
-      signal: signal || controller.signal,
+      signal: combineAbortSignals([signal, controller.signal]),
     });
 
     clearTimeout(timeoutId);

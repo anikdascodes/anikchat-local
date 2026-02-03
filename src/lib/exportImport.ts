@@ -4,7 +4,8 @@
  */
 
 import { storageService } from './storageService';
-import { Conversation } from '@/types/chat';
+import { APIConfig, Conversation } from '@/types/chat';
+import { redactConfigForExport } from '@/lib/exportRedaction';
 
 export interface ExportData {
   version: 1;
@@ -25,13 +26,13 @@ export async function exportAllData(): Promise<void> {
     if (conv) conversations.push(conv);
   }
 
-  const config = await storageService.getConfig();
+  const config = await storageService.getConfig<APIConfig>();
 
   const exportData: ExportData = {
     version: 1,
     exportedAt: new Date().toISOString(),
     conversations,
-    config: config as Record<string, unknown> | undefined,
+    config: config ? (redactConfigForExport(config) as unknown as Record<string, unknown>) : undefined,
   };
 
   const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
