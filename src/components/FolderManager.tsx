@@ -2,6 +2,7 @@ import { useState, useCallback, memo } from 'react';
 import { Folder, Plus, X, Check, ChevronDown, ChevronRight, Tag } from 'lucide-react';
 import { ConversationFolder, Conversation } from '@/types/chat';
 import { Button } from '@/components/ui/button';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Input } from '@/components/ui/input';
 import {
   DropdownMenu,
@@ -44,6 +45,7 @@ export const FolderManager = memo(function FolderManager({
   const [newFolderName, setNewFolderName] = useState('');
   const [newFolderColor, setNewFolderColor] = useState(FOLDER_COLORS[0].value);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
+  const [deleteFolderId, setDeleteFolderId] = useState<string | null>(null);
 
   const handleCreate = useCallback(() => {
     if (newFolderName.trim()) {
@@ -73,11 +75,37 @@ export const FolderManager = memo(function FolderManager({
     return conversations.filter(c => !c.folderId);
   }, [conversations]);
 
+  const confirmDeleteFolder = useCallback(() => {
+    if (!deleteFolderId) return;
+    onDeleteFolder(deleteFolderId);
+    setDeleteFolderId(null);
+  }, [deleteFolderId, onDeleteFolder]);
+
+  const folderToDelete = deleteFolderId
+    ? folders.find(f => f.id === deleteFolderId)
+    : null;
+
   return (
     <div className="space-y-1">
+      <ConfirmDialog
+        open={!!deleteFolderId}
+        onOpenChange={(open) => {
+          if (!open) setDeleteFolderId(null);
+        }}
+        title="Delete folder?"
+        description={
+          folderToDelete
+            ? `Delete "${folderToDelete.name}"?`
+            : 'This will delete the selected folder.'
+        }
+        confirmLabel="Delete"
+        confirmVariant="destructive"
+        onConfirm={confirmDeleteFolder}
+      />
       {/* All Chats */}
-      <button
-        className={`w-full flex items-center gap-2 px-3 py-2 text-sm rounded-lg transition-colors ${
+      <Button
+        variant="ghost"
+        className={`w-full justify-start gap-2 px-3 py-2 text-sm rounded-lg ${
           activeFolder === null
             ? 'bg-sidebar-accent text-foreground'
             : 'text-muted-foreground hover:bg-sidebar-accent/50'
@@ -89,7 +117,7 @@ export const FolderManager = memo(function FolderManager({
         <span className="ml-auto text-xs text-muted-foreground">
           {conversations.length}
         </span>
-      </button>
+      </Button>
 
       {/* Folders */}
       {folders.map(folder => {
@@ -105,37 +133,40 @@ export const FolderManager = memo(function FolderManager({
                   : 'text-muted-foreground hover:bg-sidebar-accent/50'
               }`}
             >
-              <button
+              <Button
+                variant="ghost"
+                size="icon"
                 onClick={() => toggleExpanded(folder.id)}
-                className="p-0.5 hover:bg-muted rounded"
+                className="h-6 w-6"
               >
                 {isExpanded ? (
                   <ChevronDown className="h-3 w-3" />
                 ) : (
                   <ChevronRight className="h-3 w-3" />
                 )}
-              </button>
+              </Button>
               <div className={`w-3 h-3 rounded-full ${folder.color}`} />
-              <button
-                className="flex-1 text-left truncate"
+              <Button
+                variant="ghost"
+                className="flex-1 justify-start h-auto p-0 text-left truncate"
                 onClick={() => onSelectFolder(folder.id)}
               >
                 {folder.name}
-              </button>
+              </Button>
               <span className="text-xs text-muted-foreground">
                 {folderConvs.length}
               </span>
-              <button
-                className="p-1 opacity-0 group-hover:opacity-100 hover:bg-destructive/20 rounded transition-all"
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 opacity-0 group-hover:opacity-100 hover:bg-destructive/20"
                 onClick={(e) => {
                   e.stopPropagation();
-                  if (window.confirm(`Delete folder "${folder.name}"?`)) {
-                    onDeleteFolder(folder.id);
-                  }
+                  setDeleteFolderId(folder.id);
                 }}
               >
                 <X className="h-3 w-3 text-destructive" />
-              </button>
+              </Button>
             </div>
             
             {isExpanded && folderConvs.length > 0 && (
@@ -161,8 +192,9 @@ export const FolderManager = memo(function FolderManager({
 
       {/* Unfoldered indicator */}
       {folders.length > 0 && getUnfolderedConversations().length > 0 && (
-        <button
-          className="w-full flex items-center gap-2 px-3 py-2 text-sm rounded-lg text-muted-foreground hover:bg-sidebar-accent/50 transition-colors"
+        <Button
+          variant="ghost"
+          className="w-full justify-start gap-2 px-3 py-2 text-sm rounded-lg text-muted-foreground hover:bg-sidebar-accent/50"
           onClick={() => onSelectFolder('uncategorized')}
         >
           <Tag className="h-4 w-4" />
@@ -170,7 +202,7 @@ export const FolderManager = memo(function FolderManager({
           <span className="ml-auto text-xs">
             {getUnfolderedConversations().length}
           </span>
-        </button>
+        </Button>
       )}
 
       {/* Create Folder */}
@@ -190,13 +222,16 @@ export const FolderManager = memo(function FolderManager({
           />
           <div className="flex items-center gap-1">
             {FOLDER_COLORS.map(color => (
-              <button
+              <Button
                 key={color.value}
+                variant="ghost"
+                size="icon"
                 className={`w-5 h-5 rounded-full ${color.value} ${
                   newFolderColor === color.value ? 'ring-2 ring-offset-2 ring-primary' : ''
                 }`}
                 onClick={() => setNewFolderColor(color.value)}
                 title={color.name}
+                aria-label={`Folder color ${color.name}`}
               />
             ))}
           </div>
@@ -210,13 +245,14 @@ export const FolderManager = memo(function FolderManager({
           </div>
         </div>
       ) : (
-        <button
-          className="w-full flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-sidebar-accent/50 rounded-lg transition-colors"
+        <Button
+          variant="ghost"
+          className="w-full justify-start gap-2 px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-sidebar-accent/50 rounded-lg"
           onClick={() => setIsCreating(true)}
         >
           <Plus className="h-4 w-4" />
           New Folder
-        </button>
+        </Button>
       )}
     </div>
   );

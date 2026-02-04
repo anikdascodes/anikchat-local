@@ -2,6 +2,7 @@ import { useMemo, memo, useState, useEffect } from 'react';
 import { Coins, TrendingUp, MessageSquare, Brain } from 'lucide-react';
 import { Conversation, TokenUsage } from '@/types/chat';
 import { estimateTokens } from '@/lib/tokenizer';
+import { logger } from '@/lib/logger';
 import {
   Tooltip,
   TooltipContent,
@@ -45,13 +46,17 @@ export const TokenTracker = memo(function TokenTracker({
   useEffect(() => {
     import('@/lib/memoryManager').then(({ isEmbeddingModelLoaded }) => {
       setMemoryActive(isEmbeddingModelLoaded());
-    }).catch(() => {});
+    }).catch((error) => {
+      logger.debug('Failed to load memory manager:', error);
+    });
     
     // Recheck periodically
     const interval = setInterval(() => {
       import('@/lib/memoryManager').then(({ isEmbeddingModelLoaded }) => {
         setMemoryActive(isEmbeddingModelLoaded());
-      }).catch(() => {});
+      }).catch((error) => {
+        logger.debug('Failed to refresh memory manager status:', error);
+      });
     }, 5000);
     
     return () => clearInterval(interval);

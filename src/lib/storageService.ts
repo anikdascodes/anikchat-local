@@ -146,8 +146,8 @@ class FileSystemStorage {
         }
         this.rootHandle = saved;
       }
-    } catch {
-      logger.debug('No saved file system handle');
+    } catch (error) {
+      logger.debug('No saved file system handle:', error);
     }
     return false;
   }
@@ -161,8 +161,8 @@ class FileSystemStorage {
         await this.ensureDirectories();
         return true;
       }
-    } catch {
-      logger.debug('Permission denied for file system');
+    } catch (error) {
+      logger.debug('Permission denied for file system:', error);
     }
     return false;
   }
@@ -353,6 +353,23 @@ class StorageService {
   private initialized = false;
   private initPromise: Promise<void> | null = null;
 
+  private safeLocalStorageGet(key: string): string | null {
+    try {
+      return localStorage.getItem(key);
+    } catch (error) {
+      logger.debug('localStorage get failed:', error);
+      return null;
+    }
+  }
+
+  private safeLocalStorageSet(key: string, value: string): void {
+    try {
+      localStorage.setItem(key, value);
+    } catch (error) {
+      logger.debug('localStorage set failed:', error);
+    }
+  }
+
   async init(): Promise<void> {
     if (this.initialized) return;
     if (this.initPromise) return this.initPromise;
@@ -363,7 +380,7 @@ class StorageService {
       // Always init chat IndexedDB too as a safe fallback.
       await this.idb.init();
 
-      const savedType = localStorage.getItem('anikchat-storage-type') as StorageType | null;
+      const savedType = this.safeLocalStorageGet('anikchat-storage-type') as StorageType | null;
       this.selectedType = savedType;
 
       if (savedType === 'filesystem' && isFileSystemSupported()) {
@@ -379,7 +396,7 @@ class StorageService {
   }
 
   isFirstTime(): boolean {
-    return !localStorage.getItem('anikchat-storage-type');
+    return !this.safeLocalStorageGet('anikchat-storage-type');
   }
 
   needsReauthorization(): boolean {
@@ -414,7 +431,7 @@ class StorageService {
       await this.migrateToFileSystem();
       this.type = 'filesystem';
       this.selectedType = 'filesystem';
-      localStorage.setItem('anikchat-storage-type', 'filesystem');
+      this.safeLocalStorageSet('anikchat-storage-type', 'filesystem');
     }
     return success;
   }
@@ -423,7 +440,7 @@ class StorageService {
     await this.idb.init();
     this.type = 'indexeddb';
     this.selectedType = 'indexeddb';
-    localStorage.setItem('anikchat-storage-type', 'indexeddb');
+    this.safeLocalStorageSet('anikchat-storage-type', 'indexeddb');
   }
 
   async disconnectFileSystem(): Promise<void> {
@@ -431,11 +448,11 @@ class StorageService {
     await this.idb.init();
     this.type = 'indexeddb';
     this.selectedType = 'indexeddb';
-    localStorage.setItem('anikchat-storage-type', 'indexeddb');
+    this.safeLocalStorageSet('anikchat-storage-type', 'indexeddb');
   }
 
   private async migrateToFileSystem(): Promise<void> {
-    const convData = localStorage.getItem('openchat-conversations');
+    const convData = this.safeLocalStorageGet('openchat-conversations');
     if (convData) {
       try {
         const parsed: unknown = JSON.parse(convData);

@@ -6,6 +6,8 @@
  * a combination of factors (not perfect, but better than plaintext).
  */
 
+import { logger } from './logger';
+
 const ENCRYPTION_KEY_NAME = 'anikchat-encryption-key';
 
 async function getOrCreateEncryptionKey(): Promise<CryptoKey> {
@@ -51,7 +53,8 @@ async function getStoredKey(): Promise<CryptoKey | null> {
               ['encrypt', 'decrypt']
             );
             resolve(key);
-          } catch {
+          } catch (error) {
+            logger.debug('Failed to import stored encryption key:', error);
             resolve(null);
           }
         } else {
@@ -102,7 +105,8 @@ export async function encryptApiKey(apiKey: string): Promise<string> {
     combined.set(new Uint8Array(encrypted), iv.length);
     
     return 'enc:' + btoa(String.fromCharCode(...combined));
-  } catch {
+  } catch (error) {
+    logger.debug('Failed to encrypt API key:', error);
     // Fallback to plaintext if encryption fails
     return apiKey;
   }
@@ -129,7 +133,8 @@ export async function decryptApiKey(encryptedKey: string): Promise<string> {
     );
 
     return new TextDecoder().decode(decrypted);
-  } catch {
+  } catch (error) {
+    logger.debug('Failed to decrypt API key:', error);
     // Return as-is if decryption fails
     return encryptedKey.startsWith('enc:') ? '' : encryptedKey;
   }

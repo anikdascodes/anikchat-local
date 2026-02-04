@@ -74,6 +74,9 @@ export const VirtualizedMessageList = memo(function VirtualizedMessageList({
   const containerRef = useRef<HTMLDivElement>(null);
   const lastStreamScrollRef = useRef(0);
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
+  const isLoadingRef = useRef(isLoading);
+  const messageCountRef = useRef(messages.length);
+  const userScrolledAwayRef = useRef(false);
 
   // Dynamic row heights
   const dynamicRowHeight = useDynamicRowHeight({
@@ -99,6 +102,18 @@ export const VirtualizedMessageList = memo(function VirtualizedMessageList({
     return () => observer.disconnect();
   }, []);
 
+  useEffect(() => {
+    isLoadingRef.current = isLoading;
+  }, [isLoading]);
+
+  useEffect(() => {
+    messageCountRef.current = messages.length;
+  }, [messages.length]);
+
+  useEffect(() => {
+    userScrolledAwayRef.current = false;
+  }, [conversationId]);
+
   // Auto-scroll to bottom on new messages or conversation switch
   useEffect(() => {
     if (messages.length > 0 && listRef.current) {
@@ -110,20 +125,22 @@ export const VirtualizedMessageList = memo(function VirtualizedMessageList({
   useEffect(() => {
     if (!isLoading || !listRef.current) return;
 
-    let isUserScrollingAway = false;
     const list = listRef.current as unknown as { _outerRef?: HTMLElement };
     // Capture outerRef at effect start to ensure we clean up the same element
     const outerRef = list._outerRef;
 
     // Immediately scroll to bottom when streaming starts
-    listRef.current.scrollToRow(messages.length - 1);
+    listRef.current.scrollToRow(messageCountRef.current - 1);
 
     // Track user scroll events
     const handleScroll = (e: Event) => {
       const target = e.target as HTMLElement;
       const distanceFromBottom = target.scrollHeight - target.scrollTop - target.clientHeight;
       // User is considered scrolling away if more than 200px from bottom
-      isUserScrollingAway = distanceFromBottom > 200;
+      userScrolledAwayRef.current = distanceFromBottom > 200;
+      if (distanceFromBottom < 50) {
+        userScrolledAwayRef.current = false;
+      }
     };
 
     if (outerRef) {
@@ -132,9 +149,10 @@ export const VirtualizedMessageList = memo(function VirtualizedMessageList({
 
     // Use MutationObserver to detect content changes and scroll
     const observer = new MutationObserver(() => {
-      if (!listRef.current || isUserScrollingAway) return;
+      if (!listRef.current || userScrolledAwayRef.current) return;
       requestAnimationFrame(() => {
-        listRef.current?.scrollToRow(messages.length - 1);
+        const count = messageCountRef.current;
+        listRef.current?.scrollToRow(Math.max(0, count - 1));
       });
     });
 
@@ -149,11 +167,12 @@ export const VirtualizedMessageList = memo(function VirtualizedMessageList({
 
     // Backup interval in case MutationObserver misses updates
     const backupInterval = setInterval(() => {
-      if (!listRef.current || isUserScrollingAway) return;
+      if (!listRef.current || userScrolledAwayRef.current) return;
       if (outerRef) {
         const distanceFromBottom = outerRef.scrollHeight - outerRef.scrollTop - outerRef.clientHeight;
         if (distanceFromBottom > 10) {
-          listRef.current.scrollToRow(messages.length - 1);
+          const count = messageCountRef.current;
+          listRef.current.scrollToRow(Math.max(0, count - 1));
         }
       }
     }, 100);
@@ -166,6 +185,23 @@ export const VirtualizedMessageList = memo(function VirtualizedMessageList({
       }
     };
   }, [isLoading, messages.length]);
+
+  // Fallback: subscribe to streaming content so auto-scroll keeps up with chunk updates
+  useEffect(() => {
+    const unsub = useStreamingStore.subscribe(
+      state => state.streamingContent,
+      () => {
+        if (!isLoadingRef.current || userScrolledAwayRef.current) return;
+        const count = messageCountRef.current;
+        if (count > 0) {
+          requestAnimationFrame(() => {
+            listRef.current?.scrollToRow(count - 1);
+          });
+        }
+      }
+    );
+    return () => unsub();
+  }, []);
 
   // Scroll when streaming completes
   useEffect(() => {

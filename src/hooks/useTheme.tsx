@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState } from 'react';
+import { logger } from '@/lib/logger';
 
 type Theme = 'light' | 'dark' | 'system';
 
@@ -10,13 +11,30 @@ interface ThemeContextType {
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
+  const safeLocalStorageGet = (key: string): string | null => {
+    try {
+      return localStorage.getItem(key);
+    } catch (error) {
+      logger.debug('localStorage get failed:', error);
+      return null;
+    }
+  };
+
+  const safeLocalStorageSet = (key: string, value: string): void => {
+    try {
+      localStorage.setItem(key, value);
+    } catch (error) {
+      logger.debug('localStorage set failed:', error);
+    }
+  };
+
   const [theme, setTheme] = useState<Theme>(() => {
-    const stored = localStorage.getItem('openchat-theme');
+    const stored = safeLocalStorageGet('openchat-theme');
     return (stored as Theme) || 'dark';
   });
 
   useEffect(() => {
-    localStorage.setItem('openchat-theme', theme);
+    safeLocalStorageSet('openchat-theme', theme);
 
     const root = document.documentElement;
     root.classList.remove('light', 'dark');

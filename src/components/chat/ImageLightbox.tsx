@@ -1,6 +1,7 @@
 import { X } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import { useEffect } from 'react';
+import { Button } from '@/components/ui/button';
 
 interface ImageLightboxProps {
   src: string;
@@ -42,13 +43,14 @@ export function ImageLightbox({ src, onClose }: ImageLightboxProps) {
         height: '100vh'
       }}
     >
-      <button
+      <Button
+        variant="ghost"
         onClick={onClose}
-        className="absolute top-4 right-4 p-3 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors z-[10000]"
+        className="absolute top-4 right-4 h-12 w-12 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors z-[10000]"
         aria-label="Close image"
       >
         <X className="h-8 w-8" />
-      </button>
+      </Button>
       <img
         src={src}
         alt="Expanded view"

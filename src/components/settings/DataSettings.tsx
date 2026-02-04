@@ -2,8 +2,11 @@ import { useCallback, useState, useEffect, useRef } from 'react';
 import { HardDrive, FolderOpen, Cloud, CheckCircle2, Loader2, Trash2, Download, AlertTriangle, Database, Upload } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Conversation, APIConfig } from '@/types/chat';
 import { storageService, isFileSystemSupported, StorageType } from '@/lib/storageService';
+import { logger } from '@/lib/logger';
 import { toast } from 'sonner';
 
 interface DataSettingsProps {
@@ -28,15 +31,20 @@ function getConversationSize(conv: Conversation): number {
 }
 
 function getStorageUsage(): number {
-  let total = 0;
-  for (let i = 0; i < localStorage.length; i++) {
-    const key = localStorage.key(i);
-    if (key?.startsWith('openchat-')) {
-      const value = localStorage.getItem(key) || '';
-      total += new Blob([value]).size;
+  try {
+    let total = 0;
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key?.startsWith('openchat-')) {
+        const value = localStorage.getItem(key) || '';
+        total += new Blob([value]).size;
+      }
     }
+    return total;
+  } catch (error) {
+    logger.debug('localStorage access failed:', error);
+    return 0;
   }
-  return total;
 }
 
 export function DataSettings({
@@ -52,6 +60,10 @@ export function DataSettings({
   const [storageDirName, setStorageDirName] = useState<string | null>(null);
   const [isStorageLoading, setIsStorageLoading] = useState(false);
   const [needsReauth, setNeedsReauth] = useState(false);
+  const [disconnectDialogOpen, setDisconnectDialogOpen] = useState(false);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [pendingImport, setPendingImport] = useState<{ config?: APIConfig; conversations?: Conversation[] } | null>(null);
+  const [pendingImportSummary, setPendingImportSummary] = useState('');
 
   useEffect(() => {
     const initStorage = async () => {
@@ -78,7 +90,8 @@ export function DataSettings({
         setNeedsReauth(false);
         toast.success('Folder selected! Your data will be stored locally.');
       }
-    } catch {
+    } catch (error) {
+      logger.debug('Failed to select folder:', error);
       toast.error('Failed to select folder');
     } finally {
       setIsStorageLoading(false);
@@ -100,7 +113,8 @@ export function DataSettings({
         setStorageDirName(null);
         toast.info('Could not access folder. Switched to browser storage.');
       }
-    } catch {
+    } catch (error) {
+      logger.debug('Failed to reauthorize folder access:', error);
       toast.error('Failed to reauthorize folder access');
     } finally {
       setIsStorageLoading(false);
@@ -119,17 +133,20 @@ export function DataSettings({
     }
   }, []);
 
-  const handleDisconnectFolder = useCallback(async () => {
-    if (window.confirm('Disconnect from folder? Data in the folder will be preserved.')) {
-      setIsStorageLoading(true);
-      try {
-        await storageService.disconnectFileSystem();
-        setStorageType('indexeddb');
-        setStorageDirName(null);
-        toast.success('Disconnected from folder');
-      } finally {
-        setIsStorageLoading(false);
-      }
+  const handleDisconnectFolder = useCallback(() => {
+    setDisconnectDialogOpen(true);
+  }, []);
+
+  const confirmDisconnectFolder = useCallback(async () => {
+    setDisconnectDialogOpen(false);
+    setIsStorageLoading(true);
+    try {
+      await storageService.disconnectFileSystem();
+      setStorageType('indexeddb');
+      setStorageDirName(null);
+      toast.success('Disconnected from folder');
+    } finally {
+      setIsStorageLoading(false);
     }
   }, []);
 
@@ -156,17 +173,21 @@ export function DataSettings({
           return;
         }
 
-        // Confirm import
         const confirmMsg = `Import ${hasConversations ? data.conversations.length + ' conversations' : ''}${hasConfig && hasConversations ? ' and ' : ''}${hasConfig ? 'settings' : ''}? This will merge with existing data.`;
-        
-        if (window.confirm(confirmMsg)) {
-          onImportData?.({
-            config: hasConfig ? data.config : undefined,
-            conversations: hasConversations ? data.conversations : undefined,
-          });
-          toast.success('Data imported successfully');
+
+        if (!onImportData) {
+          toast.error('Import not available');
+          return;
         }
-      } catch {
+
+        setPendingImport({
+          config: hasConfig ? data.config : undefined,
+          conversations: hasConversations ? data.conversations : undefined,
+        });
+        setPendingImportSummary(confirmMsg);
+        setImportDialogOpen(true);
+      } catch (error) {
+        logger.debug('Failed to parse backup file:', error);
         toast.error('Failed to parse backup file');
       }
     };
@@ -182,6 +203,37 @@ export function DataSettings({
 
   return (
     <div className="space-y-6">
+      <ConfirmDialog
+        open={disconnectDialogOpen}
+        onOpenChange={setDisconnectDialogOpen}
+        title="Disconnect from folder?"
+        description="Data in the folder will be preserved. You can reconnect later."
+        confirmLabel="Disconnect"
+        confirmVariant="destructive"
+        confirmDisabled={isStorageLoading}
+        onConfirm={confirmDisconnectFolder}
+      />
+      <ConfirmDialog
+        open={importDialogOpen}
+        onOpenChange={(open) => {
+          setImportDialogOpen(open);
+          if (!open) {
+            setPendingImport(null);
+            setPendingImportSummary('');
+          }
+        }}
+        title="Import backup data?"
+        description={pendingImportSummary}
+        confirmLabel="Import"
+        onConfirm={() => {
+          if (!pendingImport) return;
+          onImportData?.(pendingImport);
+          toast.success('Data imported successfully');
+          setPendingImport(null);
+          setPendingImportSummary('');
+          setImportDialogOpen(false);
+        }}
+      />
       {/* Storage Location */}
       <Card className="border-primary/20">
         <CardHeader>
@@ -339,7 +391,7 @@ export function DataSettings({
               Export Data
             </Button>
             
-            <input
+            <Input
               type="file"
               ref={fileInputRef}
               accept=".json"

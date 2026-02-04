@@ -24,6 +24,7 @@ import {
     Play
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -37,6 +38,7 @@ import {
     DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu';
 import { toast } from 'sonner';
+import { logger } from '@/lib/logger';
 import { useConfig } from '@/hooks/useConfig';
 import { APIConfig, defaultConfig, getAudioModels, LLMProvider, LLMModel } from '@/types/chat';
 import { cn } from '@/lib/utils';
@@ -91,7 +93,8 @@ async function transcribeAudio(
             try {
                 const parsed = JSON.parse(errorData);
                 errorMessage = parsed.error?.message || parsed.message || errorMessage;
-            } catch {
+            } catch (error) {
+                logger.debug('Failed to parse transcription error response:', error);
                 if (errorData) errorMessage = errorData;
             }
             throw new Error(errorMessage);
@@ -357,7 +360,8 @@ function TranscribeVideo() {
             setCopied(true);
             toast.success('Copied to clipboard!');
             setTimeout(() => setCopied(false), 2000);
-        } catch {
+        } catch (error) {
+            logger.debug('Failed to copy transcription:', error);
             toast.error('Failed to copy');
         }
     };
@@ -528,7 +532,7 @@ function TranscribeVideo() {
                                     onDrop={handleDrop}
                                     onClick={() => !isProcessing && !file && fileInputRef.current?.click()}
                                 >
-                                    <input
+                                    <Input
                                         ref={fileInputRef}
                                         type="file"
                                         accept="video/*,audio/*"

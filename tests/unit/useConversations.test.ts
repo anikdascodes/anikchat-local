@@ -174,6 +174,20 @@ describe('useConversations', () => {
     const { result } = renderHook(() => useConversations());
 
     await waitFor(() => {
+      expect(result.current.draftConversation).toBeTruthy();
+    });
+
+    // App should start on a NEW draft chat, not auto-open history.
+    expect(result.current.activeConversationId).toBe(result.current.draftConversation!.id);
+    // Draft IDs should not be persisted as the last active history chat.
+    expect(localStorageData.get('openchat-active-conversation')).toBeUndefined();
+
+    // Selecting a conversation from history should become active and be persisted.
+    act(() => {
+      result.current.handleSelectConversation('1');
+    });
+
+    await waitFor(() => {
       expect(result.current.activeConversationId).toBe('1');
     });
 

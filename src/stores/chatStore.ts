@@ -2,6 +2,8 @@ import { create } from 'zustand';
 import { persist, subscribeWithSelector } from 'zustand/middleware';
 import { Conversation, Message, APIConfig, defaultConfig, generateId, generateTitle } from '@/types/chat';
 import { storageService } from '@/lib/storageService';
+import { logger } from '@/lib/logger';
+import { handleStorageError } from '@/lib/errorHandler';
 
 interface ChatState {
   // State
@@ -78,7 +80,9 @@ export const useChatStore = create<ChatState>()(
               : state.activeConversationId;
             return { conversations: newConvs, activeConversationId: newActiveId };
           });
-          storageService.deleteConversation(id).catch(() => {});
+          storageService.deleteConversation(id).catch((error) => {
+            logger.debug('Failed to delete conversation from storage:', error);
+          });
           get().saveToStorage();
         },
 
@@ -142,14 +146,16 @@ export const useChatStore = create<ChatState>()(
             convs.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
             set({ conversations: convs });
           } catch (e) {
-            console.error('Failed to load conversations:', e);
+            handleStorageError(e, 'chatStore.loadFromStorage');
           }
         },
 
         saveToStorage: async () => {
           const { conversations } = get();
           for (const conv of conversations) {
-            await storageService.saveConversation(conv.id, conv).catch(() => {});
+            await storageService.saveConversation(conv.id, conv).catch((error) => {
+              logger.debug('Failed to save conversation to storage:', error);
+            });
           }
         },
       }),

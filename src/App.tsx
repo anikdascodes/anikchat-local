@@ -13,23 +13,27 @@ import { logger } from "@/lib/logger";
 import Index from "./pages/Index";
 
 // #region agent log
-window.debugLog = (message: string, data?: unknown, hypothesisId?: string) => {
-  if (message.includes('Chunk') || message.includes('render (streaming)')) {
-    if (Math.random() > 0.02) return; // Extreme throttling for high-freq logs
-  }
+if (import.meta.env.DEV) {
+  window.debugLog = (message: string, data?: unknown, hypothesisId?: string) => {
+    if (message.includes('Chunk') || message.includes('render (streaming)')) {
+      if (Math.random() > 0.02) return; // Extreme throttling for high-freq logs
+    }
 
-  const timestamp = Date.now();
-  console.log(`[DEBUG] ${message}`, data);
+    const timestamp = Date.now();
+    logger.debug(`[DEBUG] ${message}`, data);
 
-  try {
-    const logs = JSON.parse(localStorage.getItem('anikchat-debug-logs') || '[]');
-    logs.push({ message, data, hypothesisId, timestamp });
-    if (logs.length > 100) logs.shift();
-    localStorage.setItem('anikchat-debug-logs', JSON.stringify(logs));
-  } catch {
-    // Ignore localStorage failures (quota, private mode, etc.).
-  }
-};
+    try {
+      const logs = JSON.parse(localStorage.getItem('anikchat-debug-logs') || '[]');
+      logs.push({ message, data, hypothesisId, timestamp });
+      if (logs.length > 100) logs.shift();
+      localStorage.setItem('anikchat-debug-logs', JSON.stringify(logs));
+    } catch (error) {
+      logger.debug('Failed to persist debug logs:', error);
+    }
+  };
+} else {
+  window.debugLog = () => {};
+}
 
 // High-precision Lag Monitor (only active in dev or manually enabled)
 let lastFrameTime = performance.now();

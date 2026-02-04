@@ -47,13 +47,18 @@ let modelLoadFailed = false;
 function isRAGEnabled(): boolean {
   try {
     return localStorage.getItem('anikchat-rag-enabled') === 'true';
-  } catch {
+  } catch (error) {
+    logger.debug('localStorage get failed:', error);
     return false;
   }
 }
 
 export function setRAGEnabled(enabled: boolean): void {
-  localStorage.setItem('anikchat-rag-enabled', enabled ? 'true' : 'false');
+  try {
+    localStorage.setItem('anikchat-rag-enabled', enabled ? 'true' : 'false');
+  } catch (error) {
+    logger.debug('localStorage set failed:', error);
+  }
   if (!enabled) {
     // Unload model to free memory
     embeddingModel = null;
@@ -95,7 +100,8 @@ async function generateEmbedding(text: string): Promise<number[] | null> {
   if (!model) return null;
   try {
     return await model.getEmbedding(text);
-  } catch {
+  } catch (error) {
+    logger.debug('Embedding generation failed:', error);
     return null;
   }
 }
@@ -206,7 +212,8 @@ export async function preloadEmbeddingModel(): Promise<boolean> {
   try {
     await getEmbeddingModel();
     return embeddingModel !== null;
-  } catch {
+  } catch (error) {
+    logger.debug('Embedding model preload failed:', error);
     return false;
   }
 }

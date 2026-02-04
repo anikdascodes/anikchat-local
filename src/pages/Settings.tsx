@@ -2,12 +2,14 @@ import { useState, useCallback, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Palette, Key, MessageSquare, Sliders, Database, Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { APIConfig, Conversation, defaultConfig } from '@/types/chat';
 import { useConfig } from '@/hooks/useConfig';
 import { storageService } from '@/lib/storageService';
 import { toast } from 'sonner';
 import { redactConfigForExport } from '@/lib/exportRedaction';
+import { logger } from '@/lib/logger';
 import {
   AppearanceSettings,
   ApiSettings,
@@ -17,10 +19,30 @@ import {
 } from '@/components/settings';
 
 function Settings() {
+  const safeLocalStorageGet = (key: string): string | null => {
+    try {
+      return localStorage.getItem(key);
+    } catch (error) {
+      logger.debug('localStorage get failed:', error);
+      return null;
+    }
+  };
+
+  const safeLocalStorageRemove = (key: string): void => {
+    try {
+      localStorage.removeItem(key);
+    } catch (error) {
+      logger.debug('localStorage remove failed:', error);
+    }
+  };
+
   const navigate = useNavigate();
   const [config, setConfig] = useConfig<APIConfig>(defaultConfig);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [saved, setSaved] = useState(false);
+  const [deleteConversationId, setDeleteConversationId] = useState<string | null>(null);
+  const [clearConversationsOpen, setClearConversationsOpen] = useState(false);
+  const [clearAllDataOpen, setClearAllDataOpen] = useState(false);
 
   // Load conversations from storageService
   useEffect(() => {
@@ -35,9 +57,10 @@ function Settings() {
 
         convs.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
         setConversations(convs);
-      } catch {
+      } catch (error) {
+        logger.debug('Failed to load conversations from storage, falling back to localStorage:', error);
         // Fallback to localStorage
-        const local = localStorage.getItem('openchat-conversations');
+        const local = safeLocalStorageGet('openchat-conversations');
         if (local) setConversations(JSON.parse(local));
       }
     };
@@ -70,33 +93,47 @@ function Settings() {
     toast.success('Data exported (API keys not included)');
   }, [config, conversations]);
 
-  const handleDeleteConversation = useCallback(async (id: string) => {
-    if (window.confirm('Delete this conversation?')) {
-      await storageService.deleteConversation(id);
-      setConversations((prev) => prev.filter((c) => c.id !== id));
-      toast.success('Conversation deleted');
-    }
+  const handleDeleteConversation = useCallback((id: string) => {
+    setDeleteConversationId(id);
   }, []);
 
-  const handleClearConversations = useCallback(async () => {
-    if (window.confirm('Delete all conversations? This cannot be undone.')) {
-      for (const conv of conversations) {
-        await storageService.deleteConversation(conv.id);
-      }
-      setConversations([]);
-      toast.success('All conversations deleted');
+  const handleClearConversations = useCallback(() => {
+    setClearConversationsOpen(true);
+  }, []);
+
+  const handleClearAllData = useCallback(() => {
+    setClearAllDataOpen(true);
+  }, []);
+
+  const confirmDeleteConversation = useCallback(async () => {
+    if (!deleteConversationId) return;
+    await storageService.deleteConversation(deleteConversationId);
+    setConversations((prev) => prev.filter((c) => c.id !== deleteConversationId));
+    setDeleteConversationId(null);
+    toast.success('Conversation deleted');
+  }, [deleteConversationId]);
+
+  const confirmClearConversations = useCallback(async () => {
+    for (const conv of conversations) {
+      await storageService.deleteConversation(conv.id);
     }
+    setConversations([]);
+    setClearConversationsOpen(false);
+    toast.success('All conversations deleted');
   }, [conversations]);
 
-  const handleClearAllData = useCallback(async () => {
-    if (window.confirm('⚠️ Delete ALL data? This cannot be undone!')) {
-      await storageService.clearAll();
-      localStorage.removeItem('openchat-config');
-      localStorage.removeItem('openchat-conversations');
-      toast.success('All data cleared');
-      window.location.reload();
-    }
+  const confirmClearAllData = useCallback(async () => {
+    await storageService.clearAll();
+    safeLocalStorageRemove('openchat-config');
+    safeLocalStorageRemove('openchat-conversations');
+    setClearAllDataOpen(false);
+    toast.success('All data cleared');
+    window.location.reload();
   }, []);
+
+  const conversationToDelete = deleteConversationId
+    ? conversations.find((c) => c.id === deleteConversationId)
+    : null;
 
   const handleImportData = useCallback(async (data: { config?: APIConfig; conversations?: Conversation[] }) => {
     if (data.config) {
@@ -129,6 +166,39 @@ function Settings() {
 
   return (
     <div className="min-h-screen bg-background">
+      <ConfirmDialog
+        open={!!deleteConversationId}
+        onOpenChange={(open) => {
+          if (!open) setDeleteConversationId(null);
+        }}
+        title="Delete conversation?"
+        description={
+          conversationToDelete
+            ? `This will permanently delete "${conversationToDelete.title}".`
+            : 'This will permanently delete the selected conversation.'
+        }
+        confirmLabel="Delete"
+        confirmVariant="destructive"
+        onConfirm={confirmDeleteConversation}
+      />
+      <ConfirmDialog
+        open={clearConversationsOpen}
+        onOpenChange={setClearConversationsOpen}
+        title="Delete all conversations?"
+        description="This cannot be undone."
+        confirmLabel="Delete All"
+        confirmVariant="destructive"
+        onConfirm={confirmClearConversations}
+      />
+      <ConfirmDialog
+        open={clearAllDataOpen}
+        onOpenChange={setClearAllDataOpen}
+        title="Delete ALL data?"
+        description="This removes settings, conversations, and summaries. This cannot be undone."
+        confirmLabel="Delete All Data"
+        confirmVariant="destructive"
+        onConfirm={confirmClearAllData}
+      />
       {/* Header */}
       <header className="sticky top-0 z-10 bg-background/80 backdrop-blur-sm border-b border-border">
         <div className="max-w-4xl mx-auto px-4 h-14 flex items-center gap-4">

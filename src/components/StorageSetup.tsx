@@ -62,10 +62,11 @@ export function StorageSetup({ onComplete, isFirstTime = true }: StorageSetupPro
         <CardContent className="space-y-4">
           {/* File System Option - Recommended */}
           {fsSupported && (
-            <button
+            <Button
+              variant="outline"
               onClick={handleSelectFolder}
               disabled={isLoading}
-              className={`w-full p-4 rounded-lg border-2 transition-all text-left ${
+              className={`w-full h-auto p-4 rounded-lg border-2 transition-all text-left ${
                 selectedType === 'filesystem'
                   ? 'border-primary bg-primary/5'
                   : 'border-border hover:border-primary/50 hover:bg-muted/50'
@@ -101,14 +102,15 @@ export function StorageSetup({ onComplete, isFirstTime = true }: StorageSetupPro
                   <Check className="h-5 w-5 text-primary" />
                 )}
               </div>
-            </button>
+            </Button>
           )}
 
           {/* Browser Storage Option */}
-          <button
+          <Button
+            variant="outline"
             onClick={handleUseBrowser}
             disabled={isLoading}
-            className={`w-full p-4 rounded-lg border-2 transition-all text-left ${
+            className={`w-full h-auto p-4 rounded-lg border-2 transition-all text-left ${
               selectedType === 'indexeddb'
                 ? 'border-primary bg-primary/5'
                 : 'border-border hover:border-primary/50 hover:bg-muted/50'
@@ -136,7 +138,7 @@ export function StorageSetup({ onComplete, isFirstTime = true }: StorageSetupPro
                 <Check className="h-5 w-5 text-primary" />
               )}
             </div>
-          </button>
+          </Button>
 
           {!fsSupported && (
             <div className="p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/20">

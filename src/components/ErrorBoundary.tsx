@@ -1,5 +1,6 @@
 import { Component, ReactNode } from 'react';
 import { logger } from '@/lib/logger';
+import { Button } from '@/components/ui/button';
 
 interface Props {
   children: ReactNode;
@@ -40,15 +41,14 @@ export class ErrorBoundary extends Component<Props, State> {
             <p className="text-muted-foreground mb-4">
               {this.state.error?.message || 'An unexpected error occurred'}
             </p>
-            <button
+            <Button
               onClick={() => {
                 this.setState({ hasError: false, error: null });
                 window.location.reload();
               }}
-              className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
             >
               Reload Page
-            </button>
+            </Button>
           </div>
         </div>
       );
@@ -66,12 +66,12 @@ export class RouteErrorBoundary extends ErrorBoundary {
         <div className="flex-1 flex items-center justify-center p-8">
           <div className="text-center">
             <p className="text-muted-foreground mb-4">Failed to load this page</p>
-            <button
+            <Button
+              variant="link"
               onClick={() => this.setState({ hasError: false, error: null })}
-              className="text-primary hover:underline"
             >
               Try again
-            </button>
+            </Button>
           </div>
         </div>
       );

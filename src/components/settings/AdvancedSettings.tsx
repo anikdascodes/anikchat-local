@@ -4,9 +4,11 @@ import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { Button } from '@/components/ui/button';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { APIConfig, defaultConfig } from '@/types/chat';
 import { toast } from 'sonner';
 import { setRAGEnabled, preloadEmbeddingModel, isEmbeddingModelLoaded } from '@/lib/memoryManager';
+import { logger } from '@/lib/logger';
 
 interface AdvancedSettingsProps {
   config: APIConfig;
@@ -22,20 +24,29 @@ const parameterConfigs = [
 ] as const;
 
 export function AdvancedSettings({ config, onConfigChange }: AdvancedSettingsProps) {
-  const [ragEnabled, setRagEnabled] = useState(() => 
-    localStorage.getItem('anikchat-rag-enabled') === 'true'
-  );
+  const [ragEnabled, setRagEnabled] = useState(() => {
+    try {
+      return localStorage.getItem('anikchat-rag-enabled') === 'true';
+    } catch (error) {
+      logger.debug('localStorage get failed:', error);
+      return false;
+    }
+  });
   const [ragLoading, setRagLoading] = useState(false);
+  const [resetDialogOpen, setResetDialogOpen] = useState(false);
 
   const updateConfig = (partial: Partial<APIConfig>) => {
     onConfigChange({ ...config, ...partial });
   };
 
   const handleReset = () => {
-    if (window.confirm('Reset all settings to defaults?')) {
-      onConfigChange(defaultConfig);
-      toast.success('Settings reset to defaults');
-    }
+    setResetDialogOpen(true);
+  };
+
+  const confirmReset = () => {
+    onConfigChange(defaultConfig);
+    setResetDialogOpen(false);
+    toast.success('Settings reset to defaults');
   };
 
   const handleRAGToggle = async (enabled: boolean) => {
@@ -61,6 +72,15 @@ export function AdvancedSettings({ config, onConfigChange }: AdvancedSettingsPro
 
   return (
     <Card>
+      <ConfirmDialog
+        open={resetDialogOpen}
+        onOpenChange={setResetDialogOpen}
+        title="Reset settings to defaults?"
+        description="This will restore all settings to their default values."
+        confirmLabel="Reset"
+        confirmVariant="destructive"
+        onConfirm={confirmReset}
+      />
       <CardHeader>
         <CardTitle>Advanced Settings</CardTitle>
         <CardDescription>Model parameters and features</CardDescription>

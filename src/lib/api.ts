@@ -155,9 +155,12 @@ export async function streamChat(options: StreamOptions): Promise<void> {
       // Store messages in memory for future RAG
       const lastMsg = messages[messages.length - 1];
       if (lastMsg) {
-        storeMessage(conversationId, lastMsg).catch(() => {});
+        storeMessage(conversationId, lastMsg).catch((error) => {
+          logger.debug('Failed to store message for RAG:', error);
+        });
       }
-    } catch {
+    } catch (error) {
+      logger.debug('Failed to prepare memory context:', error);
       // Fallback to basic context
       contextResult = prepareContext(messages, config.systemPrompt, existingSummary, model.modelId);
     }
@@ -329,9 +332,29 @@ export async function streamChat(options: StreamOptions): Promise<void> {
         .map((m) => {
           type MixedBlock = AnthropicTextContent | AnthropicImageContent | OpenAITextContent | OpenAIImageContent;
 
-          const blocks: MixedBlock[] = Array.isArray(m.content)
-            ? (m.content as MixedBlock[])
-            : [{ type: 'text', text: String(m.content) }];
+          const isMixedBlock = (value: unknown): value is MixedBlock => {
+            if (!value || typeof value !== 'object') return false;
+            const maybe = value as { type?: unknown };
+            if (typeof maybe.type !== 'string') return false;
+            return ['text', 'image', 'image_url'].includes(maybe.type);
+          };
+
+          const rawBlocks = Array.isArray(m.content) ? m.content : [m.content];
+          const blocks: MixedBlock[] = [];
+
+          for (const block of rawBlocks) {
+            if (isMixedBlock(block)) {
+              blocks.push(block);
+              continue;
+            }
+            if (typeof block === 'string') {
+              blocks.push({ type: 'text', text: block });
+            }
+          }
+
+          if (blocks.length === 0) {
+            blocks.push({ type: 'text', text: String(m.content) });
+          }
 
           // Normalize into Anthropic blocks (text + image only).
           const content: (AnthropicTextContent | AnthropicImageContent)[] = [];
@@ -602,8 +625,8 @@ export async function streamChat(options: StreamOptions): Promise<void> {
           const parsed = JSON.parse(data);
           const content = parsed.choices?.[0]?.delta?.content;
           if (content) onChunk(content);
-        } catch {
-          // Ignore partial data at end
+        } catch (error) {
+          logger.debug('Failed to parse trailing stream chunk:', error);
         }
       }
     }

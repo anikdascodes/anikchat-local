@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import { Plus, Trash2, Eye, EyeOff, ChevronDown, ChevronRight, Check, Server, Cpu, Loader2, Zap, Shield, Mic } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
@@ -46,6 +47,7 @@ interface LLMProvidersManagerProps {
 export function LLMProvidersManager({ config, onConfigChange }: LLMProvidersManagerProps) {
   const [expandedProviders, setExpandedProviders] = useState<Set<string>>(new Set());
   const [showApiKeys, setShowApiKeys] = useState<Set<string>>(new Set());
+  const [deleteProviderId, setDeleteProviderId] = useState<string | null>(null);
 
   const providers = config.providers ?? [];
 
@@ -101,14 +103,17 @@ export function LLMProvidersManager({ config, onConfigChange }: LLMProvidersMana
     });
   }, [config, providers, onConfigChange]);
 
-  const deleteProvider = useCallback((providerId: string) => {
-    if (!window.confirm('Delete this provider and all its models?')) return;
+  const requestDeleteProvider = useCallback((providerId: string) => {
+    setDeleteProviderId(providerId);
+  }, []);
 
-    const newProviders = providers.filter(p => p.id !== providerId);
+  const confirmDeleteProvider = useCallback(() => {
+    if (!deleteProviderId) return;
+    const newProviders = providers.filter(p => p.id !== deleteProviderId);
     let newActiveProviderId = config.activeProviderId;
     let newActiveModelId = config.activeModelId;
 
-    if (config.activeProviderId === providerId) {
+    if (config.activeProviderId === deleteProviderId) {
       newActiveProviderId = null;
       newActiveModelId = null;
     }
@@ -119,8 +124,9 @@ export function LLMProvidersManager({ config, onConfigChange }: LLMProvidersMana
       activeProviderId: newActiveProviderId,
       activeModelId: newActiveModelId,
     });
+    setDeleteProviderId(null);
     toast.success('Provider deleted');
-  }, [config, providers, onConfigChange]);
+  }, [deleteProviderId, config, providers, onConfigChange]);
 
   const addModel = useCallback((providerId: string, category: 'llm' | 'audio' = 'llm') => {
     const newModel: LLMModel = {
@@ -323,6 +329,17 @@ export function LLMProvidersManager({ config, onConfigChange }: LLMProvidersMana
 
   return (
     <div className="space-y-4">
+      <ConfirmDialog
+        open={!!deleteProviderId}
+        onOpenChange={(open) => {
+          if (!open) setDeleteProviderId(null);
+        }}
+        title="Delete provider?"
+        description="This will remove the provider and all its models."
+        confirmLabel="Delete"
+        confirmVariant="destructive"
+        onConfirm={confirmDeleteProvider}
+      />
       {/* Active Model Display */}
       {config.activeProviderId && config.activeModelId && (
         <Card className="border-green-500/50 bg-green-500/5">
@@ -372,7 +389,7 @@ export function LLMProvidersManager({ config, onConfigChange }: LLMProvidersMana
                     size="icon"
                     onClick={(e) => {
                       e.stopPropagation();
-                      deleteProvider(provider.id);
+                      requestDeleteProvider(provider.id);
                     }}
                     className="text-destructive hover:text-destructive hover:bg-destructive/10"
                   >
@@ -416,9 +433,11 @@ export function LLMProvidersManager({ config, onConfigChange }: LLMProvidersMana
                         placeholder={getApiKeyPlaceholder(provider.name)}
                         className="font-mono text-sm pr-10"
                       />
-                      <button
+                      <Button
                         type="button"
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                        variant="ghost"
+                        size="icon"
+                        className="absolute right-2 top-1/2 -translate-y-1/2 h-7 w-7 text-muted-foreground hover:text-foreground"
                         onClick={() => toggleShowApiKey(provider.id)}
                       >
                         {showApiKeys.has(provider.id) ? (
@@ -426,7 +445,7 @@ export function LLMProvidersManager({ config, onConfigChange }: LLMProvidersMana
                         ) : (
                           <Eye className="h-4 w-4" />
                         )}
-                      </button>
+                      </Button>
                     </div>
                     {provider.baseUrl.includes('localhost') && (
                       <p className="text-xs text-muted-foreground">

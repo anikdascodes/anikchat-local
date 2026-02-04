@@ -1,4 +1,5 @@
 import DOMPurify from 'dompurify';
+import { logger } from './logger';
 
 // Configure DOMPurify
 DOMPurify.setConfig({
@@ -67,7 +68,8 @@ export function sanitizeUrl(url: string): string | null {
       return null;
     }
     return parsed.href;
-  } catch {
+  } catch (error) {
+    logger.debug('Failed to sanitize URL:', error);
     return null;
   }
 }

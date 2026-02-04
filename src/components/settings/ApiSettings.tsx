@@ -1,5 +1,15 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectSeparator,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { APIConfig } from '@/types/chat';
 import { LLMProvidersManager } from '@/components/LLMProvidersManager';
 
@@ -37,26 +47,44 @@ export function ApiSettings({ config, onConfigChange }: ApiSettingsProps) {
         <CardContent>
           <div className="space-y-2">
             <Label>Select Model</Label>
-            <select
-              className="w-full p-2.5 rounded-md border border-border bg-background text-sm"
-              value={`${config.activeProviderId}:${config.activeModelId}`}
-              onChange={(e) => {
-                const [providerId, modelId] = e.target.value.split(':');
+            <Select
+              value={
+                config.activeProviderId && config.activeModelId
+                  ? `${config.activeProviderId}:${config.activeModelId}`
+                  : "__none__"
+              }
+              onValueChange={(value) => {
+                if (value === "__none__") {
+                  updateConfig({ activeProviderId: null, activeModelId: null });
+                  return;
+                }
+                const [providerId, modelId] = value.split(':');
                 updateConfig({
                   activeProviderId: providerId || null,
                   activeModelId: modelId || null,
                 });
               }}
             >
-              <option value=":">Select a model...</option>
-              {(config.providers || []).flatMap(provider =>
-                provider.models.map(model => (
-                  <option key={`${provider.id}:${model.id}`} value={`${provider.id}:${model.id}`}>
-                    {provider.name} / {model.displayName} {model.isVisionModel && '👁️'}
-                  </option>
-                ))
-              )}
-            </select>
+              <SelectTrigger>
+                <SelectValue placeholder="Select a model..." />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">Select a model...</SelectItem>
+                <SelectSeparator />
+                {(config.providers || [])
+                  .filter(provider => provider.models.length > 0)
+                  .map(provider => (
+                    <SelectGroup key={provider.id}>
+                      <SelectLabel>{provider.name}</SelectLabel>
+                      {provider.models.map(model => (
+                        <SelectItem key={`${provider.id}:${model.id}`} value={`${provider.id}:${model.id}`}>
+                          {model.displayName} {model.isVisionModel && '👁️'}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  ))}
+              </SelectContent>
+            </Select>
             <p className="text-xs text-muted-foreground">
               This model handles all chat interactions. Vision models (👁️) can process images directly.
             </p>

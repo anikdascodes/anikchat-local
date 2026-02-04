@@ -11,6 +11,7 @@ import { ModelSelector } from '@/components/ModelSelector';
 import { ConversationSearch } from '@/components/ConversationSearch';
 import { TokenTracker } from '@/components/TokenTracker';
 import { StreamingMessage } from '@/components/StreamingMessage';
+import { Button } from '@/components/ui/button';
 import { useLocalStorage } from '@/hooks/useLocalStorage';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { useConversations } from '@/hooks/useConversations';
@@ -113,6 +114,8 @@ export default function Index() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const scrollAnchorRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<ChatInputRef>(null);
+  const isLoadingRef = useRef(false);
+  const wasLoadingRef = useRef(false);
 
   // Use conversation management hook
   const {
@@ -209,6 +212,10 @@ export default function Index() {
   const userScrolledAwayRef = useRef(false);
   const isInitialScrollDoneRef = useRef(false);
 
+  useEffect(() => {
+    isLoadingRef.current = isLoading;
+  }, [isLoading]);
+
   // Reset scroll tracking when conversation changes
   useEffect(() => {
     userScrolledAwayRef.current = false;
@@ -221,19 +228,9 @@ export default function Index() {
 
     const el = scrollRef.current;
 
-    // Scroll to bottom function
-    const scrollToBottom = () => {
-      if (!el || !isLoading) return;
-      
-      if (!isInitialScrollDoneRef.current || !userScrolledAwayRef.current) {
-        el.scrollTop = el.scrollHeight;
-        isInitialScrollDoneRef.current = true;
-      }
-    };
-
     // Track when user manually scrolls up
     const handleUserScroll = () => {
-      if (!isLoading || !isInitialScrollDoneRef.current) return;
+      if (!isLoadingRef.current || !isInitialScrollDoneRef.current) return;
       
       const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
       userScrolledAwayRef.current = distanceFromBottom > 200;
@@ -244,43 +241,46 @@ export default function Index() {
 
     el.addEventListener('scroll', handleUserScroll, { passive: true });
 
-    // Initial scroll
-    if (isLoading) {
+    // Initial scroll when streaming starts
+    if (isLoadingRef.current) {
       isInitialScrollDoneRef.current = false;
       userScrolledAwayRef.current = false;
-      scrollToBottom();
+      requestAnimationFrame(() => {
+        if (scrollAnchorRef.current) {
+          scrollAnchorRef.current.scrollIntoView({ behavior: 'auto', block: 'end' });
+        } else {
+          el.scrollTop = el.scrollHeight;
+        }
+        isInitialScrollDoneRef.current = true;
+      });
     }
-
-    // Use MutationObserver to detect content changes
-    const observer = new MutationObserver(() => {
-      if (isLoading) {
-        requestAnimationFrame(() => {
-          requestAnimationFrame(scrollToBottom);
-        });
-      }
-    });
-
-    observer.observe(el, {
-      childList: true,
-      subtree: true,
-      characterData: true,
-    });
-
-    // Backup interval
-    const backupInterval = setInterval(() => {
-      if (!isLoading || userScrolledAwayRef.current) return;
-      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-      if (distanceFromBottom > 20) {
-        el.scrollTop = el.scrollHeight;
-      }
-    }, 50);
 
     return () => {
       el.removeEventListener('scroll', handleUserScroll);
-      observer.disconnect();
-      clearInterval(backupInterval);
     };
   }, [isLoading, activeConversationId]);
+
+  // Fallback: direct subscription to streaming content to ensure auto-scroll stays reliable
+  useEffect(() => {
+    const unsub = useStreamingStore.subscribe(
+      state => state.streamingContent,
+      () => {
+        if (!isLoadingRef.current || userScrolledAwayRef.current) return;
+        requestAnimationFrame(() => {
+          if (scrollAnchorRef.current) {
+            scrollAnchorRef.current.scrollIntoView({ behavior: 'auto', block: 'end' });
+            isInitialScrollDoneRef.current = true;
+            return;
+          }
+          const el = scrollRef.current;
+          if (!el) return;
+          el.scrollTop = el.scrollHeight;
+          isInitialScrollDoneRef.current = true;
+        });
+      }
+    );
+    return () => unsub();
+  }, []);
 
   // Consolidated scroll effect for non-streaming changes
   useEffect(() => {
@@ -289,6 +289,21 @@ export default function Index() {
     // Smooth scroll to bottom when messages change or loading stops
     scrollAnchorRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [activeConversation?.messages?.length, hasStreamingContentForScroll, activeConversationId, isLoading]);
+
+  // Scroll to bottom when streaming completes (delay for DOM update)
+  useEffect(() => {
+    const wasLoading = wasLoadingRef.current;
+    wasLoadingRef.current = isLoading;
+
+    if (wasLoading && !isLoading) {
+      const timer = window.setTimeout(() => {
+        if (userScrolledAwayRef.current) return;
+        scrollAnchorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      }, 50);
+
+      return () => window.clearTimeout(timer);
+    }
+  }, [isLoading]);
 
   // Keyboard shortcuts
   useKeyboardShortcuts([
@@ -379,21 +394,25 @@ export default function Index() {
         {/* Header with Model Selector */}
         <div className="border-b border-border px-4 py-2 flex items-center gap-2 md:gap-4">
           {/* Mobile menu button */}
-          <button
+          <Button
+            variant="ghost"
+            size="icon"
             onClick={() => setSidebarOpen(true)}
-            className="p-2 hover:bg-muted rounded-lg transition-colors md:hidden"
+            className="md:hidden"
             aria-label="Open menu"
           >
             <Menu className="h-5 w-5 text-muted-foreground" />
-          </button>
+          </Button>
 
           {/* Desktop Sidebar Toggle */}
           <TooltipProvider>
             <Tooltip>
               <TooltipTrigger asChild>
-                <button
+                <Button
+                  variant="ghost"
+                  size="icon"
                   onClick={() => setSidebarCollapsed(prev => !prev)}
-                  className="p-2 hover:bg-muted rounded-lg transition-colors hidden md:flex"
+                  className="hidden md:flex"
                   aria-label={sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
                 >
                   {sidebarCollapsed ? (
@@ -401,7 +420,7 @@ export default function Index() {
                   ) : (
                     <PanelLeftClose className="h-5 w-5 text-muted-foreground" />
                   )}
-                </button>
+                </Button>
               </TooltipTrigger>
               <TooltipContent side="right">
                 <p>{sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'} (⌘B)</p>

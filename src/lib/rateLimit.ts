@@ -116,13 +116,21 @@ export function checkRateLimit(providerId: string, providerKey: string): RateLim
 /**
  * Wait for rate limit to allow request
  */
-export async function waitForRateLimit(providerId: string, providerKey: string): Promise<void> {
+export async function waitForRateLimit(
+  providerId: string,
+  providerKey: string,
+  maxRetries: number = 5
+): Promise<void> {
+  if (maxRetries <= 0) {
+    throw new Error('Rate limit exceeded - maximum retries reached');
+  }
+
   const result = checkRateLimit(providerId, providerKey);
   
   if (!result.allowed && result.retryAfterMs) {
     await new Promise(resolve => setTimeout(resolve, result.retryAfterMs));
     // Re-check after waiting
-    return waitForRateLimit(providerId, providerKey);
+    return waitForRateLimit(providerId, providerKey, maxRetries - 1);
   }
 }
 

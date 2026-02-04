@@ -5,6 +5,8 @@ import { exportAsMarkdown, downloadFile } from '@/lib/export';
 import { storageService } from '@/lib/storageService';
 import { deleteConversationMemory } from '@/lib/memoryManager';
 import { useStreamingStore } from '@/stores/streamingStore';
+import { logger } from '@/lib/logger';
+import { handleStorageError } from '@/lib/errorHandler';
 
 interface UseConversationsReturn {
   conversations: Conversation[];
@@ -22,11 +24,27 @@ interface UseConversationsReturn {
 }
 
 export function useConversations(): UseConversationsReturn {
+  const safeLocalStorageGet = (key: string): string | null => {
+    try {
+      return localStorage.getItem(key);
+    } catch (error) {
+      logger.debug('localStorage get failed:', error);
+      return null;
+    }
+  };
+
+  const safeLocalStorageSet = (key: string, value: string): void => {
+    try {
+      localStorage.setItem(key, value);
+    } catch (error) {
+      logger.debug('localStorage set failed:', error);
+    }
+  };
+
   const [conversations, setConversationsState] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [draftConversation, setDraftConversation] = useState<Conversation | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
-  const hasRestoredActive = useRef(false);
   const saveTimeoutsRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const lastSavedUpdatedAtRef = useRef<Map<string, number>>(new Map());
 
@@ -40,7 +58,7 @@ export function useConversations(): UseConversationsReturn {
     const loadConversations = async () => {
       try {
         // 1. Try metadata cache first for instant sidebar render
-        const cachedMetadata = localStorage.getItem('openchat-conversations-metadata');
+        const cachedMetadata = safeLocalStorageGet('openchat-conversations-metadata');
         let initialConvs: Conversation[] = [];
 
         if (cachedMetadata) {
@@ -62,8 +80,8 @@ export function useConversations(): UseConversationsReturn {
                 }));
             }
             setConversationsState(initialConvs);
-          } catch {
-            // Ignore corrupt metadata cache.
+          } catch (error) {
+            logger.debug('Failed to parse conversation metadata cache:', error);
           }
         }
 
@@ -72,7 +90,7 @@ export function useConversations(): UseConversationsReturn {
         if (ids.length > 0) {
           // 3. Optimization: Instead of loading EVERYTHING, we only load the active one
           // and any conversation that was updated recently (top 5) to ensure titles are fresh.
-          const lastActiveId = localStorage.getItem('openchat-active-conversation');
+          const lastActiveId = safeLocalStorageGet('openchat-active-conversation');
           const targetIds = Array.from(new Set([
             ...(lastActiveId ? [lastActiveId] : []),
             ...ids.slice(0, 5)
@@ -105,17 +123,11 @@ export function useConversations(): UseConversationsReturn {
             return final;
           });
 
-          // Restore active ID
-          if (lastActiveId && ids.includes(lastActiveId)) {
-            setActiveConversationId(lastActiveId);
-          } else if (ids.length > 0) {
-            setActiveConversationId(ids[0]);
-          }
-
-          hasRestoredActive.current = true;
+          // NOTE: We intentionally do NOT auto-open the last active conversation.
+          // The app should start in a new draft chat until the user selects from history.
         }
       } catch (e) {
-        console.error('Failed to load conversations:', e);
+        handleStorageError(e, 'useConversations.load');
       }
       setIsLoaded(true);
     };
@@ -139,10 +151,11 @@ export function useConversations(): UseConversationsReturn {
 
   // Update active conversation tracker in localStorage
   useEffect(() => {
-    if (activeConversationId) {
-      localStorage.setItem('openchat-active-conversation', activeConversationId);
-    }
-  }, [activeConversationId]);
+    if (!activeConversationId) return;
+    // Don't persist draft IDs (draft chats are not in history yet).
+    if (draftConversation && activeConversationId === draftConversation.id) return;
+    safeLocalStorageSet('openchat-active-conversation', activeConversationId);
+  }, [activeConversationId, draftConversation?.id]);
 
   const metadataTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -157,9 +170,9 @@ export function useConversations(): UseConversationsReturn {
         const metadata = conversations.map(({ id, title, createdAt, updatedAt, folderId }) => ({
           id, title, createdAt, updatedAt, folderId
         }));
-        localStorage.setItem('openchat-conversations-metadata', JSON.stringify(metadata));
+        safeLocalStorageSet('openchat-conversations-metadata', JSON.stringify(metadata));
       } catch (e) {
-        console.warn('Failed to save metadata:', e);
+        logger.warn('Failed to save metadata:', e);
       }
     }, 5000); // Increased to 5 second debounce for metadata (very lightweight)
 
@@ -188,8 +201,9 @@ export function useConversations(): UseConversationsReturn {
         try {
           await storageService.saveConversation(conv.id, conv);
           lastSavedUpdatedAtRef.current.set(conv.id, updatedAtMs);
-        } catch {
-          // Ignore persistence errors; UI remains usable with in-memory state.
+        } catch (error) {
+          logger.debug('Failed to save conversation to storage:', error);
+          // UI remains usable with in-memory state.
         }
       }, 1500); // 1.5s debounce for USB stick safety
 

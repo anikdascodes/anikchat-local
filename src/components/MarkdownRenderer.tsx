@@ -14,6 +14,7 @@ import markdown from 'react-syntax-highlighter/dist/cjs/languages/prism/markdown
 import { Copy, Check } from 'lucide-react';
 import { useState, memo, useCallback, useMemo, HTMLAttributes, ClassAttributes } from 'react';
 import { ExtraProps } from 'react-markdown';
+import { Button } from '@/components/ui/button';
 import 'katex/dist/katex.min.css';
 
 // Register common languages for PrismLight to improve performance
@@ -55,9 +56,11 @@ const CodeBlock = memo(function CodeBlock({ language, value, isStreaming }: Code
       <div className="flex items-center justify-between bg-muted px-4 py-2">
         <span className="text-xs text-muted-foreground font-mono">{language || 'plaintext'}</span>
         {!isStreaming && (
-          <button
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={copyCode}
-            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+            className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
             aria-label="Copy code"
           >
             {copied ? (
@@ -71,7 +74,7 @@ const CodeBlock = memo(function CodeBlock({ language, value, isStreaming }: Code
                 <span>Copy</span>
               </>
             )}
-          </button>
+          </Button>
         )}
       </div>
       {shouldHighlight ? (

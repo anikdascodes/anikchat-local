@@ -4,6 +4,15 @@ import { Message } from '@/types/chat';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { loadMessageImages, isImageRef } from '@/lib/imageStorage';
 import { ImageLightbox, ThinkingBlock, MessageEditor, MessageActions, BranchNavigator } from './chat';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Button } from '@/components/ui/button';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger
+} from '@/components/ui/tooltip';
+import { cn } from '@/lib/utils';
 
 interface ChatMessageProps {
   message: Message;
@@ -34,8 +43,8 @@ function parseThinkingBlock(content: string): { thinking: string | null; output:
   return { thinking: null, output: content };
 }
 
-export const ChatMessage = memo(function ChatMessage({ 
-  message, 
+export const ChatMessage = memo(function ChatMessage({
+  message,
   onRegenerate,
   onEdit,
   onBranchNavigate,
@@ -45,7 +54,7 @@ export const ChatMessage = memo(function ChatMessage({
   const [loadedImages, setLoadedImages] = useState<string[]>([]);
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState('');
-  
+
   const isUser = message.role === 'user';
 
   // Load images from refs
@@ -82,23 +91,38 @@ export const ChatMessage = memo(function ChatMessage({
     <>
       {expandedImage && <ImageLightbox src={expandedImage} onClose={() => setExpandedImage(null)} />}
 
-      <div className={`py-6 ${isUser ? 'bg-background' : 'bg-secondary/30'} group`}>
+      <div
+        className={cn(
+          "py-6 group transition-colors",
+          isUser ? "bg-background" : "bg-secondary/30"
+        )}
+      >
         <div className="max-w-3xl mx-auto px-4">
           <div className="flex gap-4">
-            {/* Avatar */}
-            <div
-              className={`flex-shrink-0 w-8 h-8 rounded-xl flex items-center justify-center text-xs font-bold text-white shadow-sm ${
-                isUser ? 'bg-gradient-to-br from-violet-500 to-purple-600' : 'bg-gradient-to-br from-cyan-500 to-blue-600'
-              }`}
-            >
-              {isUser ? 'U' : 'AC'}
-            </div>
+            {/* Avatar using shadcn Avatar */}
+            <Avatar className={cn(
+              "h-8 w-8 shrink-0 shadow-sm",
+              isUser
+                ? "bg-gradient-to-br from-violet-500 to-purple-600"
+                : "bg-gradient-to-br from-cyan-500 to-blue-600"
+            )}>
+              <AvatarFallback
+                className={cn(
+                  "text-xs font-bold text-white",
+                  isUser
+                    ? "bg-gradient-to-br from-violet-500 to-purple-600"
+                    : "bg-gradient-to-br from-cyan-500 to-blue-600"
+                )}
+              >
+                {isUser ? 'U' : 'AC'}
+              </AvatarFallback>
+            </Avatar>
 
             <div className="flex-1 min-w-0">
               {/* Header */}
               <div className="flex items-center gap-2 mb-1.5">
                 <span className="font-medium text-sm">{isUser ? 'You' : 'AnikChat'}</span>
-                
+
                 {/* Branch Navigator */}
                 {message.totalSiblings && message.totalSiblings > 1 && onBranchNavigate && (
                   <BranchNavigator
@@ -107,14 +131,24 @@ export const ChatMessage = memo(function ChatMessage({
                     onNavigate={(index) => onBranchNavigate(message.id, index)}
                   />
                 )}
+
+                {/* Edit Button */}
                 {isUser && onEdit && !isEditing && (
-                  <button
-                    onClick={startEditing}
-                    className="p-1 opacity-0 group-hover:opacity-100 hover:bg-muted rounded transition-all"
-                    aria-label="Edit message"
-                  >
-                    <Pencil className="h-3 w-3 text-muted-foreground" />
-                  </button>
+                  <TooltipProvider delayDuration={300}>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6 rounded-md opacity-0 group-hover:opacity-100 transition-opacity"
+                          onClick={startEditing}
+                        >
+                          <Pencil className="h-3 w-3 text-muted-foreground" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">Edit message</TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                 )}
               </div>
 
@@ -122,14 +156,19 @@ export const ChatMessage = memo(function ChatMessage({
               {loadedImages.length > 0 && (
                 <div className="flex flex-wrap gap-2 mb-3">
                   {loadedImages.map((img, idx) => (
-                    <img
+                    <Button
                       key={idx}
-                      src={img}
-                      alt={`Attachment ${idx + 1}`}
-                      className="max-w-48 max-h-48 rounded-lg object-cover border border-border cursor-pointer hover:opacity-90 transition-opacity"
-                      loading="lazy"
+                      variant="ghost"
+                      className="p-0 h-auto w-auto focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 rounded-lg transition-transform hover:scale-[1.02]"
                       onClick={() => setExpandedImage(img)}
-                    />
+                    >
+                      <img
+                        src={img}
+                        alt={`Attachment ${idx + 1}`}
+                        className="max-w-48 max-h-48 rounded-lg object-cover border border-border shadow-sm hover:shadow-md transition-shadow"
+                        loading="lazy"
+                      />
+                    </Button>
                   ))}
                 </div>
               )}
@@ -156,7 +195,7 @@ export const ChatMessage = memo(function ChatMessage({
                   <div className="text-sm leading-relaxed whitespace-pre-wrap break-words">{output}</div>
                 )
               ) : (
-                <div className="text-sm leading-relaxed overflow-x-auto">
+                <div className="text-sm leading-relaxed overflow-x-auto prose-sm prose-neutral dark:prose-invert max-w-none">
                   <MarkdownRenderer content={output} />
                 </div>
               )}

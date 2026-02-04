@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { logger } from '@/lib/logger';
 
 export function useLocalStorage<T>(key: string, initialValue: T): [T, (value: T | ((val: T) => T)) => void] {
   // Initialize from localStorage only once
@@ -19,7 +20,7 @@ export function useLocalStorage<T>(key: string, initialValue: T): [T, (value: T 
 
       return JSON.parse(item, reviver);
     } catch (error) {
-      console.error(error);
+      logger.error('localStorage read error:', error);
       return initialValue;
     }
   });
@@ -42,7 +43,7 @@ export function useLocalStorage<T>(key: string, initialValue: T): [T, (value: T 
       try {
         window.localStorage.setItem(key, JSON.stringify(pendingValueRef.current));
       } catch (error) {
-        console.error('localStorage write error:', error);
+        logger.error('localStorage write error:', error);
       }
     }, 300);
 
@@ -61,7 +62,7 @@ export function useLocalStorage<T>(key: string, initialValue: T): [T, (value: T 
         try {
           window.localStorage.setItem(key, JSON.stringify(pendingValueRef.current));
         } catch (error) {
-          console.error('localStorage flush error:', error);
+          logger.error('localStorage flush error:', error);
         }
       }
     };

@@ -1,5 +1,13 @@
 import { Copy, Check, RotateCcw } from 'lucide-react';
 import { useState, useCallback } from 'react';
+import { Button } from '@/components/ui/button';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger
+} from '@/components/ui/tooltip';
+import { cn } from '@/lib/utils';
 
 interface MessageActionsProps {
   content: string;
@@ -16,34 +24,53 @@ export function MessageActions({ content, onRegenerate }: MessageActionsProps) {
   }, [content]);
 
   return (
-    <div className="mt-3 flex items-center gap-2">
-      <button
-        onClick={copyToClipboard}
-        className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted rounded-md transition-all"
-        aria-label="Copy message"
-      >
-        {copied ? (
-          <>
-            <Check className="h-3.5 w-3.5 text-green-500" />
-            <span>Copied!</span>
-          </>
-        ) : (
-          <>
-            <Copy className="h-3.5 w-3.5" />
-            <span>Copy</span>
-          </>
-        )}
-      </button>
-      
+    <div className="mt-3 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+      <TooltipProvider delayDuration={300}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={copyToClipboard}
+              className={cn(
+                "h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground rounded-lg transition-all",
+                copied && "text-green-500 hover:text-green-600"
+              )}
+            >
+              {copied ? (
+                <>
+                  <Check className="h-3.5 w-3.5" />
+                  <span>Copied!</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="h-3.5 w-3.5" />
+                  <span>Copy</span>
+                </>
+              )}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">Copy to clipboard</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+
       {onRegenerate && (
-        <button
-          onClick={onRegenerate}
-          className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted rounded-md transition-all"
-          aria-label="Regenerate response"
-        >
-          <RotateCcw className="h-3.5 w-3.5" />
-          <span>Regenerate</span>
-        </button>
+        <TooltipProvider delayDuration={300}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={onRegenerate}
+                className="h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground rounded-lg"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                <span>Regenerate</span>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Generate a new response</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       )}
     </div>
   );

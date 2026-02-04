@@ -2,6 +2,7 @@ import { Message } from '@/types/chat';
 import { estimateTokens, estimateMessagesTokens, getTokenLimit } from './tokenizer';
 import { retrieveRelevantMessages, getConversationSummary } from './memoryManager';
 import { CONTEXT_CONFIG } from '@/constants';
+import { logger } from './logger';
 
 const {
   SYSTEM_PROMPT_BUDGET,
@@ -93,8 +94,9 @@ export async function prepareContextWithMemory(
           apiMessages.push({ role: 'system', content: ragContent });
           usedTokens += ragTokens;
         }
-      } catch {
-        // RAG retrieval failed, continue without it
+      } catch (error) {
+        logger.debug('RAG retrieval failed:', error);
+        // Continue without RAG context
       }
     }
   }

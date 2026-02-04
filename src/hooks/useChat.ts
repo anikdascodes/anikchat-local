@@ -13,6 +13,7 @@ import {
 import { streamChat, summarizeMessages } from '@/lib/api';
 import { processMessageImages } from '@/lib/imageStorage';
 import { logger } from '@/lib/logger';
+import { handleApiError } from '@/lib/errorHandler';
 
 // Performance: Adaptive flush interval based on response speed
 const FAST_FLUSH_MS = 50;   // For fast responses
@@ -87,9 +88,11 @@ export function useChat({
     return () => {
       if (flushTimeoutRef.current) {
         window.clearTimeout(flushTimeoutRef.current);
+        flushTimeoutRef.current = undefined;
       }
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
+        abortControllerRef.current = null;
       }
     };
   }, []);
@@ -247,7 +250,10 @@ export function useChat({
 
           // Schedule flush if not already scheduled
           if (!flushTimeoutRef.current) {
-            flushTimeoutRef.current = window.setTimeout(flushStreamingBuffer, flushInterval);
+            flushTimeoutRef.current = window.setTimeout(() => {
+              flushStreamingBuffer();
+              flushTimeoutRef.current = undefined;
+            }, flushInterval);
           }
         },
         onNeedsSummarization: (messagesToSummarize) => {
@@ -257,7 +263,7 @@ export function useChat({
           };
         },
         onError: (error) => {
-          logger.error('Chat error:', error);
+          handleApiError(error, 'useChat.streamChat');
 
           // Clear streaming state
           if (flushTimeoutRef.current) {
@@ -313,8 +319,11 @@ export function useChat({
             flushTimeoutRef.current = undefined;
           }
 
-          // Get final content
-          const finalContent = totalStreamedRef.current.join('') + streamingBufferRef.current.join('');
+          // Ensure buffer is flushed before finalizing
+          flushStreamingBuffer();
+
+          // Get final content (buffer already flushed into totalStreamedRef)
+          const finalContent = totalStreamedRef.current.join('');
 
           // Clear streaming state FIRST to prevent double display
           resetStreaming();
@@ -345,7 +354,9 @@ export function useChat({
                 role: 'assistant',
                 content: finalContent,
                 timestamp: new Date(),
-              }).catch(() => { });
+              }).catch((error) => {
+                logger.debug('Failed to store message in memory:', error);
+              });
             });
           }
 
@@ -361,7 +372,9 @@ export function useChat({
 
               if (targetId) {
                 import('@/lib/memoryManager').then(({ saveConversationSummary }) => {
-                  saveConversationSummary(targetId, summary, Date.now()).catch(() => { });
+                  saveConversationSummary(targetId, summary, Date.now()).catch((error) => {
+                    logger.debug('Failed to save conversation summary:', error);
+                  });
                 });
               }
 

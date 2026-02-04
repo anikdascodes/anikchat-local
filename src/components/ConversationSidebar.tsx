@@ -7,6 +7,8 @@ import {
 } from 'lucide-react';
 import { Conversation, ConversationFolder, generateId } from '@/types/chat';
 import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -127,13 +129,13 @@ const DraggableConversation = memo(function DraggableConversation({
             : 'opacity-0 invisible pointer-events-none'
             }`}
         >
-          <input
+          <Input
             ref={isEditing ? inputRef : null}
             type="text"
             value={editValue}
             onChange={(e) => onEditChange(e.target.value)}
             onKeyDown={onKeyDown}
-            className="w-full bg-background border border-border rounded-lg px-2.5 py-1 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary transition-all duration-200"
+            className="h-8 px-2.5 py-1 text-sm"
             onClick={(e) => e.stopPropagation()}
             placeholder="Chat name..."
           />
@@ -148,8 +150,10 @@ const DraggableConversation = memo(function DraggableConversation({
       >
         {isEditing ? (
           <>
-            <button
-              className="p-1.5 hover:bg-primary/20 rounded-md transition-colors duration-150"
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 hover:bg-primary/20"
               onClick={(e) => {
                 e.stopPropagation();
                 onSaveEdit();
@@ -157,9 +161,11 @@ const DraggableConversation = memo(function DraggableConversation({
               aria-label="Save"
             >
               <Check className="h-3.5 w-3.5 text-primary" />
-            </button>
-            <button
-              className="p-1.5 hover:bg-destructive/20 rounded-md transition-colors duration-150"
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 hover:bg-destructive/20"
               onClick={(e) => {
                 e.stopPropagation();
                 onCancelEdit();
@@ -167,18 +173,20 @@ const DraggableConversation = memo(function DraggableConversation({
               aria-label="Cancel"
             >
               <XCircle className="h-3.5 w-3.5 text-muted-foreground" />
-            </button>
+            </Button>
           </>
         ) : (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button
-                className="p-1.5 hover:bg-background rounded-md transition-colors duration-150"
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 hover:bg-background"
                 onClick={(e) => e.stopPropagation()}
                 aria-label="More options"
               >
                 <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
-              </button>
+              </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-48">
               <DropdownMenuItem onClick={(e) => { e.stopPropagation(); onStartEdit(); }}>
@@ -228,7 +236,7 @@ const DroppableFolder = memo(function DroppableFolder({
   conversations,
   isExpanded,
   onToggle,
-  onDelete,
+  onRequestDelete,
   activeConvId,
   onSelectConv,
   children,
@@ -237,7 +245,7 @@ const DroppableFolder = memo(function DroppableFolder({
   conversations: Conversation[];
   isExpanded: boolean;
   onToggle: () => void;
-  onDelete: () => void;
+  onRequestDelete: () => void;
   activeConvId: string | null;
   onSelectConv: (id: string) => void;
   children?: React.ReactNode;
@@ -256,13 +264,18 @@ const DroppableFolder = memo(function DroppableFolder({
           }`}
         onClick={onToggle}
       >
-        <button className="p-0.5" onClick={(e) => e.stopPropagation()}>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-6 w-6"
+          onClick={(e) => e.stopPropagation()}
+        >
           {isExpanded ? (
             <ChevronDown className="h-3 w-3 text-muted-foreground" />
           ) : (
             <ChevronRight className="h-3 w-3 text-muted-foreground" />
           )}
-        </button>
+        </Button>
         <div className={`w-3 h-3 rounded-full ${folder.color}`} />
         {isExpanded ? (
           <FolderOpen className="h-4 w-4 text-muted-foreground" />
@@ -271,17 +284,17 @@ const DroppableFolder = memo(function DroppableFolder({
         )}
         <span className="flex-1 truncate">{folder.name}</span>
         <span className="text-xs text-muted-foreground">{folderConvs.length}</span>
-        <button
-          className="p-1 opacity-0 group-hover:opacity-100 hover:bg-destructive/20 rounded transition-all"
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-6 w-6 opacity-0 group-hover:opacity-100 hover:bg-destructive/20"
           onClick={(e) => {
             e.stopPropagation();
-            if (window.confirm(`Delete folder "${folder.name}"? Conversations will be moved to uncategorized.`)) {
-              onDelete();
-            }
+            onRequestDelete();
           }}
         >
           <Trash2 className="h-3 w-3 text-muted-foreground hover:text-destructive" />
-        </button>
+        </Button>
       </div>
 
       {isExpanded && (
@@ -332,6 +345,8 @@ export const ConversationSidebar = memo(function ConversationSidebar({
   const [newFolderName, setNewFolderName] = useState('');
   const [newFolderColor, setNewFolderColor] = useState(FOLDER_COLORS[0].value);
   const [draggedConv, setDraggedConv] = useState<Conversation | null>(null);
+  const [deleteConversationId, setDeleteConversationId] = useState<string | null>(null);
+  const [deleteFolderId, setDeleteFolderId] = useState<string | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -365,10 +380,30 @@ export const ConversationSidebar = memo(function ConversationSidebar({
   }, [isCreatingFolder]);
 
   const handleDelete = useCallback((id: string) => {
-    if (window.confirm('Delete this conversation?')) {
-      onDelete(id);
-    }
-  }, [onDelete]);
+    setDeleteConversationId(id);
+  }, []);
+
+  const confirmDeleteConversation = useCallback(() => {
+    if (!deleteConversationId) return;
+    onDelete(deleteConversationId);
+    setDeleteConversationId(null);
+  }, [deleteConversationId, onDelete]);
+
+  const confirmDeleteFolder = useCallback(() => {
+    if (!deleteFolderId) return;
+    onDeleteFolder(deleteFolderId);
+    setDeleteFolderId(null);
+  }, [deleteFolderId, onDeleteFolder]);
+
+  const conversationToDelete = useMemo(
+    () => (deleteConversationId ? conversations.find(c => c.id === deleteConversationId) : null),
+    [deleteConversationId, conversations]
+  );
+
+  const folderToDelete = useMemo(
+    () => (deleteFolderId ? folders.find(f => f.id === deleteFolderId) : null),
+    [deleteFolderId, folders]
+  );
 
   const startEditing = useCallback((conv: Conversation) => {
     setEditingId(conv.id);
@@ -482,14 +517,46 @@ export const ConversationSidebar = memo(function ConversationSidebar({
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
     >
+      <ConfirmDialog
+        open={!!deleteConversationId}
+        onOpenChange={(open) => {
+          if (!open) setDeleteConversationId(null);
+        }}
+        title="Delete conversation?"
+        description={
+          conversationToDelete
+            ? `This will permanently delete "${conversationToDelete.title}".`
+            : 'This will permanently delete the selected conversation.'
+        }
+        confirmLabel="Delete"
+        confirmVariant="destructive"
+        onConfirm={confirmDeleteConversation}
+      />
+      <ConfirmDialog
+        open={!!deleteFolderId}
+        onOpenChange={(open) => {
+          if (!open) setDeleteFolderId(null);
+        }}
+        title="Delete folder?"
+        description={
+          folderToDelete
+            ? `Delete "${folderToDelete.name}"? Conversations will be moved to uncategorized.`
+            : 'Conversations in this folder will be moved to uncategorized.'
+        }
+        confirmLabel="Delete"
+        confirmVariant="destructive"
+        onConfirm={confirmDeleteFolder}
+      />
       {/* Mobile Toggle Button */}
-      <button
+      <Button
+        variant="outline"
+        size="icon"
         onClick={onToggle}
-        className="md:hidden fixed top-3 left-3 z-50 p-2 bg-card border border-border rounded-lg transition-all duration-200 hover:bg-accent"
+        className="md:hidden fixed top-3 left-3 z-50 h-9 w-9 bg-card"
         aria-label={isOpen ? 'Close sidebar' : 'Open sidebar'}
       >
         {isOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
-      </button>
+      </Button>
 
       {/* Overlay for Mobile */}
       {isOpen && (
@@ -508,25 +575,26 @@ export const ConversationSidebar = memo(function ConversationSidebar({
       >
         {/* Top Actions Block */}
         <div className="flex-shrink-0 p-3 space-y-1.5 border-b border-sidebar-border">
-          <button
+          <Button
             onClick={onNew}
-            className="w-full flex items-center gap-3 px-3 py-2.5 text-sm font-medium rounded-xl bg-primary text-primary-foreground hover:bg-primary/90 transition-colors shadow-sm"
+            className="w-full justify-start gap-3 px-3 py-2.5 text-sm font-medium rounded-xl shadow-sm"
             aria-label="Start new chat"
           >
             <Plus className="h-4 w-4" />
             New chat
-          </button>
+          </Button>
 
           {onSearchOpen && (
-            <button
+            <Button
+              variant="ghost"
               onClick={onSearchOpen}
-              className="w-full flex items-center gap-3 px-3 py-2.5 text-sm rounded-xl hover:bg-sidebar-accent transition-colors text-sidebar-foreground"
+              className="w-full justify-start gap-3 px-3 py-2.5 text-sm rounded-xl text-sidebar-foreground"
               aria-label="Search conversations"
             >
               <Search className="h-4 w-4 text-muted-foreground" />
               <span className="flex-1 text-left">Search</span>
               <kbd className="px-1.5 py-0.5 text-[10px] bg-sidebar-accent rounded font-mono text-muted-foreground">⌘K</kbd>
-            </button>
+            </Button>
           )}
         </div>
 
@@ -542,13 +610,15 @@ export const ConversationSidebar = memo(function ConversationSidebar({
             <div className="px-3 mb-4">
               <div className="flex items-center justify-between mb-2">
                 <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Folders</h3>
-                <button
+                <Button
+                  variant="ghost"
+                  size="icon"
                   onClick={() => setIsCreatingFolder(true)}
-                  className="p-1 hover:bg-sidebar-accent rounded transition-colors"
+                  className="h-7 w-7"
                   aria-label="Create folder"
                 >
                   <FolderPlus className="h-3.5 w-3.5 text-muted-foreground" />
-                </button>
+                </Button>
               </div>
 
               {/* Create Folder Form */}
@@ -568,29 +638,33 @@ export const ConversationSidebar = memo(function ConversationSidebar({
                   />
                   <div className="flex items-center gap-2">
                     {FOLDER_COLORS.map(color => (
-                      <button
+                      <Button
                         key={color.value}
+                        variant="ghost"
+                        size="icon"
                         className={`w-6 h-6 rounded-full ${color.value} transition-all ${newFolderColor === color.value ? 'ring-2 ring-offset-2 ring-offset-sidebar-accent ring-primary scale-110' : 'hover:scale-110'
                           }`}
                         onClick={() => setNewFolderColor(color.value)}
                         title={color.name}
+                        aria-label={`Folder color ${color.name}`}
                       />
                     ))}
                   </div>
                   <div className="flex gap-2 pt-1">
-                    <button
+                    <Button
                       onClick={handleCreateFolder}
                       disabled={!newFolderName.trim()}
-                      className="flex-1 px-3 py-2 text-xs font-medium bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="flex-1 h-8 px-3 text-xs font-medium rounded-lg"
                     >
                       Create Folder
-                    </button>
-                    <button
+                    </Button>
+                    <Button
+                      variant="ghost"
                       onClick={() => setIsCreatingFolder(false)}
-                      className="px-3 py-2 text-xs hover:bg-background rounded-lg transition-colors text-muted-foreground"
+                      className="h-8 px-3 text-xs rounded-lg text-muted-foreground"
                     >
                       Cancel
-                    </button>
+                    </Button>
                   </div>
                 </div>
               )}
@@ -604,7 +678,7 @@ export const ConversationSidebar = memo(function ConversationSidebar({
                     conversations={conversations}
                     isExpanded={expandedFolders.has(folder.id)}
                     onToggle={() => toggleFolder(folder.id)}
-                    onDelete={() => onDeleteFolder(folder.id)}
+                    onRequestDelete={() => setDeleteFolderId(folder.id)}
                     activeConvId={activeId}
                     onSelectConv={onSelect}
                   >
@@ -624,13 +698,15 @@ export const ConversationSidebar = memo(function ConversationSidebar({
                 {folders.length > 0 ? 'Chats' : 'Recent'}
               </h3>
               {folders.length === 0 && (
-                <button
+                <Button
+                  variant="ghost"
+                  size="icon"
                   onClick={() => setIsCreatingFolder(true)}
-                  className="p-1 hover:bg-sidebar-accent rounded transition-colors"
+                  className="h-7 w-7"
                   aria-label="Create folder"
                 >
                   <FolderPlus className="h-3.5 w-3.5 text-muted-foreground" />
-                </button>
+                </Button>
               )}
             </div>
 
@@ -652,24 +728,26 @@ export const ConversationSidebar = memo(function ConversationSidebar({
 
         {/* Bottom Block - Tools & Settings */}
         <div className="flex-shrink-0 p-3 border-t border-sidebar-border space-y-1">
-          <button
+          <Button
+            variant="ghost"
             onClick={() => navigate('/transcribe')}
-            className="w-full flex items-center gap-3 px-3 py-2.5 text-sm rounded-xl hover:bg-sidebar-accent transition-colors text-sidebar-foreground group"
+            className="w-full justify-start gap-3 px-3 py-2.5 text-sm rounded-xl text-sidebar-foreground group"
             aria-label="Transcribe video"
           >
             <Video className="h-4 w-4 text-muted-foreground group-hover:text-violet-500 transition-colors" />
             <span className="flex-1 text-left text-muted-foreground group-hover:text-foreground transition-colors">Transcribe Video</span>
             <span className="px-1.5 py-0.5 text-[10px] bg-gradient-to-r from-violet-500/20 to-purple-500/20 rounded font-medium text-violet-500">New</span>
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="ghost"
             onClick={() => navigate('/settings')}
-            className="w-full flex items-center gap-3 px-3 py-2.5 text-sm rounded-xl hover:bg-sidebar-accent transition-colors text-sidebar-foreground group"
+            className="w-full justify-start gap-3 px-3 py-2.5 text-sm rounded-xl text-sidebar-foreground group"
             aria-label="Open settings"
           >
             <Settings className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors" />
             <span className="flex-1 text-left text-muted-foreground group-hover:text-foreground transition-colors">Settings</span>
             <kbd className="px-1.5 py-0.5 text-[10px] bg-sidebar-accent rounded font-mono text-muted-foreground">⌘,</kbd>
-          </button>
+          </Button>
         </div>
       </aside>
 

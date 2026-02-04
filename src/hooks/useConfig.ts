@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { storageService } from '@/lib/storageService';
 import { encryptApiKey, decryptApiKey, isEncrypted } from '@/lib/crypto';
 import { logger } from '@/lib/logger';
+import { handleStorageError } from '@/lib/errorHandler';
 import { APIConfig, LLMProvider } from '@/types/chat';
 
 /**
@@ -49,6 +50,23 @@ async function encryptConfig<T>(config: T): Promise<T> {
  * Automatically encrypts/decrypts API keys
  */
 export function useConfig<T>(initialValue: T): [T, (value: T | ((prev: T) => T)) => void, boolean] {
+  const safeLocalStorageGet = (key: string): string | null => {
+    try {
+      return localStorage.getItem(key);
+    } catch (error) {
+      logger.debug('localStorage get failed:', error);
+      return null;
+    }
+  };
+
+  const safeLocalStorageRemove = (key: string): void => {
+    try {
+      localStorage.removeItem(key);
+    } catch (error) {
+      logger.debug('localStorage remove failed:', error);
+    }
+  };
+
   const [value, setValue] = useState<T>(initialValue);
   const [isLoaded, setIsLoaded] = useState(false);
   const isInitialMount = useRef(true);
@@ -76,19 +94,19 @@ export function useConfig<T>(initialValue: T): [T, (value: T | ((prev: T) => T))
           if (mountedRef.current) setValue(stored);
         } else {
           // Migration fallback
-          const local = localStorage.getItem('openchat-config');
+          const local = safeLocalStorageGet('openchat-config');
           if (local) {
             let parsed = JSON.parse(local) as T;
             parsed = await decryptConfig(parsed);
             if (mountedRef.current) setValue(parsed);
             const encrypted = await encryptConfig(parsed);
             await storageService.saveConfig(encrypted);
-            localStorage.removeItem('openchat-config'); // Clean up after migration
+            safeLocalStorageRemove('openchat-config'); // Clean up after migration
           }
         }
       } catch (e) {
-        logger.error('Failed to load config:', e);
-        const local = localStorage.getItem('openchat-config');
+        handleStorageError(e, 'useConfig.load');
+        const local = safeLocalStorageGet('openchat-config');
         if (local && mountedRef.current) {
           setValue(await decryptConfig(JSON.parse(local)));
         }
@@ -113,7 +131,7 @@ export function useConfig<T>(initialValue: T): [T, (value: T | ((prev: T) => T))
         const encrypted = await encryptConfig(value);
         await storageService.saveConfig(encrypted);
       } catch (e) {
-        logger.error('Failed to save config:', e);
+        handleStorageError(e, 'useConfig.save');
       }
     }, 300); // Debounce 300ms
   }, [value, isLoaded]);
