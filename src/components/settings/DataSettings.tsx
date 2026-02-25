@@ -1,11 +1,16 @@
-import { useCallback, useState, useEffect, useRef } from 'react';
-import { HardDrive, FolderOpen, Cloud, CheckCircle2, Loader2, Trash2, Download, AlertTriangle, Database, Upload } from 'lucide-react';
+/**
+ * DataSettings — Cloud storage management
+ *
+ * All data lives in Supabase. No local folder or IndexedDB selectors needed.
+ */
+
+import { useCallback, useRef, useState } from 'react';
+import { Cloud, CheckCircle2, Trash2, Download, AlertTriangle, Database, Upload } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Conversation, APIConfig } from '@/types/chat';
-import { storageService, isFileSystemSupported, StorageType } from '@/lib/storageService';
 import { logger } from '@/lib/logger';
 import { toast } from 'sonner';
 
@@ -20,31 +25,14 @@ interface DataSettingsProps {
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
+  const k     = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i     = Math.floor(Math.log(bytes) / Math.log(k));
+  return `${parseFloat((bytes / k ** i).toFixed(1))} ${sizes[i]}`;
 }
 
 function getConversationSize(conv: Conversation): number {
   return new Blob([JSON.stringify(conv)]).size;
-}
-
-function getStorageUsage(): number {
-  try {
-    let total = 0;
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key?.startsWith('openchat-')) {
-        const value = localStorage.getItem(key) || '';
-        total += new Blob([value]).size;
-      }
-    }
-    return total;
-  } catch (error) {
-    logger.debug('localStorage access failed:', error);
-    return 0;
-  }
 }
 
 export function DataSettings({
@@ -56,265 +44,73 @@ export function DataSettings({
   onImportData,
 }: DataSettingsProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [storageType, setStorageType] = useState<StorageType>('indexeddb');
-  const [storageDirName, setStorageDirName] = useState<string | null>(null);
-  const [isStorageLoading, setIsStorageLoading] = useState(false);
-  const [needsReauth, setNeedsReauth] = useState(false);
-  const [disconnectDialogOpen, setDisconnectDialogOpen] = useState(false);
-  const [importDialogOpen, setImportDialogOpen] = useState(false);
-  const [pendingImport, setPendingImport] = useState<{ config?: APIConfig; conversations?: Conversation[] } | null>(null);
+  const [importDialogOpen, setImportDialogOpen]     = useState(false);
+  const [pendingImport,    setPendingImport]         = useState<{ config?: APIConfig; conversations?: Conversation[] } | null>(null);
   const [pendingImportSummary, setPendingImportSummary] = useState('');
 
-  useEffect(() => {
-    const initStorage = async () => {
-      await storageService.init();
-      setStorageType(storageService.getStorageType());
-      setStorageDirName(storageService.getDirectoryName());
-      setNeedsReauth(storageService.needsReauthorization());
-    };
-    initStorage();
-  }, []);
+  // ── Import handling ──────────────────────────────────────
 
-  const handleSelectFolder = useCallback(async () => {
-    if (!isFileSystemSupported()) {
-      toast.error('File System API not supported in this browser. Try Chrome or Edge.');
-      return;
-    }
-    
-    setIsStorageLoading(true);
-    try {
-      const success = await storageService.switchToFileSystem();
-      if (success) {
-        setStorageType('filesystem');
-        setStorageDirName(storageService.getDirectoryName());
-        setNeedsReauth(false);
-        toast.success('Folder selected! Your data will be stored locally.');
-      }
-    } catch (error) {
-      logger.debug('Failed to select folder:', error);
-      toast.error('Failed to select folder');
-    } finally {
-      setIsStorageLoading(false);
-    }
-  }, []);
-
-  const handleReauthorize = useCallback(async () => {
-    setIsStorageLoading(true);
-    try {
-      const success = await storageService.reauthorize();
-      if (success) {
-        setNeedsReauth(false);
-        setStorageDirName(storageService.getDirectoryName());
-        toast.success('Folder access restored!');
-      } else {
-        await storageService.switchToIndexedDB();
-        setStorageType('indexeddb');
-        setNeedsReauth(false);
-        setStorageDirName(null);
-        toast.info('Could not access folder. Switched to browser storage.');
-      }
-    } catch (error) {
-      logger.debug('Failed to reauthorize folder access:', error);
-      toast.error('Failed to reauthorize folder access');
-    } finally {
-      setIsStorageLoading(false);
-    }
-  }, []);
-
-  const handleSwitchToIndexedDB = useCallback(async () => {
-    setIsStorageLoading(true);
-    try {
-      await storageService.switchToIndexedDB();
-      setStorageType('indexeddb');
-      setStorageDirName(null);
-      toast.success('Switched to browser storage (IndexedDB)');
-    } finally {
-      setIsStorageLoading(false);
-    }
-  }, []);
-
-  const handleDisconnectFolder = useCallback(() => {
-    setDisconnectDialogOpen(true);
-  }, []);
-
-  const confirmDisconnectFolder = useCallback(async () => {
-    setDisconnectDialogOpen(false);
-    setIsStorageLoading(true);
-    try {
-      await storageService.disconnectFileSystem();
-      setStorageType('indexeddb');
-      setStorageDirName(null);
-      toast.success('Disconnected from folder');
-    } finally {
-      setIsStorageLoading(false);
-    }
-  }, []);
-
-  const handleImportData = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImportFile = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = (ev) => {
       try {
-        const data = JSON.parse(event.target?.result as string);
-        
-        // Validate the data structure
-        if (!data.config && !data.conversations) {
-          toast.error('Invalid backup file format');
-          return;
-        }
+        const raw  = ev.target?.result as string;
+        const data = JSON.parse(raw) as { config?: APIConfig; conversations?: Conversation[] };
 
-        const hasConfig = data.config && typeof data.config === 'object';
-        const hasConversations = Array.isArray(data.conversations);
+        const convCount = data.conversations?.length ?? 0;
+        const summary   = [
+          convCount > 0 ? `${convCount} conversation${convCount !== 1 ? 's' : ''}` : '',
+          data.config   ? 'settings'    : '',
+        ].filter(Boolean).join(', ');
 
-        if (!hasConfig && !hasConversations) {
-          toast.error('No valid data found in backup file');
-          return;
-        }
-
-        const confirmMsg = `Import ${hasConversations ? data.conversations.length + ' conversations' : ''}${hasConfig && hasConversations ? ' and ' : ''}${hasConfig ? 'settings' : ''}? This will merge with existing data.`;
-
-        if (!onImportData) {
-          toast.error('Import not available');
-          return;
-        }
-
-        setPendingImport({
-          config: hasConfig ? data.config : undefined,
-          conversations: hasConversations ? data.conversations : undefined,
-        });
-        setPendingImportSummary(confirmMsg);
+        setPendingImport(data);
+        setPendingImportSummary(summary || 'no recognizable data');
         setImportDialogOpen(true);
-      } catch (error) {
-        logger.debug('Failed to parse backup file:', error);
-        toast.error('Failed to parse backup file');
+      } catch (err) {
+        logger.debug('Failed to parse import file:', err);
+        toast.error('Invalid backup file — not valid JSON');
       }
     };
     reader.readAsText(file);
-    
-    // Reset input
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
-  }, [onImportData]);
+    e.target.value = '';
+  }, []);
 
-  const storageUsed = getStorageUsage();
+  const confirmImport = useCallback(() => {
+    if (pendingImport && onImportData) {
+      onImportData(pendingImport);
+      toast.success('Data imported successfully');
+    }
+    setImportDialogOpen(false);
+    setPendingImport(null);
+  }, [pendingImport, onImportData]);
+
+  // ── Storage usage ────────────────────────────────────────
+
+  const totalSize = conversations.reduce((sum, c) => sum + getConversationSize(c), 0);
 
   return (
     <div className="space-y-6">
-      <ConfirmDialog
-        open={disconnectDialogOpen}
-        onOpenChange={setDisconnectDialogOpen}
-        title="Disconnect from folder?"
-        description="Data in the folder will be preserved. You can reconnect later."
-        confirmLabel="Disconnect"
-        confirmVariant="destructive"
-        confirmDisabled={isStorageLoading}
-        onConfirm={confirmDisconnectFolder}
-      />
-      <ConfirmDialog
-        open={importDialogOpen}
-        onOpenChange={(open) => {
-          setImportDialogOpen(open);
-          if (!open) {
-            setPendingImport(null);
-            setPendingImportSummary('');
-          }
-        }}
-        title="Import backup data?"
-        description={pendingImportSummary}
-        confirmLabel="Import"
-        onConfirm={() => {
-          if (!pendingImport) return;
-          onImportData?.(pendingImport);
-          toast.success('Data imported successfully');
-          setPendingImport(null);
-          setPendingImportSummary('');
-          setImportDialogOpen(false);
-        }}
-      />
-      {/* Storage Location */}
-      <Card className="border-primary/20">
+
+      {/* Cloud Storage Status */}
+      <Card>
         <CardHeader>
-          <div className="flex items-center gap-2">
-            <HardDrive className="h-5 w-5 text-primary" />
-            <CardTitle>Storage Location</CardTitle>
-          </div>
-          <CardDescription>Choose where to store your chat data</CardDescription>
+          <CardTitle>Storage</CardTitle>
+          <CardDescription>Your data is stored securely in Supabase cloud</CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid gap-3">
-            {isFileSystemSupported() && (
-              <div className={`p-4 rounded-lg border-2 transition-all ${
-                storageType === 'filesystem' 
-                  ? 'border-primary bg-primary/5' 
-                  : 'border-border hover:border-primary/50'
-              }`}>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <FolderOpen className="h-5 w-5 text-primary" />
-                    <div>
-                      <p className="font-medium">Local Folder (SSD/HDD)</p>
-                      <p className="text-xs text-muted-foreground">
-                        {storageDirName 
-                          ? `Connected: ${storageDirName}/anikchat-data` 
-                          : 'Store data in a folder you choose'}
-                      </p>
-                    </div>
-                  </div>
-                  {storageType === 'filesystem' && needsReauth ? (
-                    <Button size="sm" onClick={handleReauthorize} disabled={isStorageLoading}>
-                      {isStorageLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Reconnect'}
-                    </Button>
-                  ) : storageType === 'filesystem' ? (
-                    <Button variant="outline" size="sm" onClick={handleDisconnectFolder} disabled={isStorageLoading}>
-                      Disconnect
-                    </Button>
-                  ) : (
-                    <Button size="sm" onClick={handleSelectFolder} disabled={isStorageLoading}>
-                      {isStorageLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Select Folder'}
-                    </Button>
-                  )}
-                </div>
-                {storageType === 'filesystem' && needsReauth && (
-                  <p className="text-xs text-amber-500 mt-2">
-                    Click "Reconnect" to restore access to your saved folder
-                  </p>
-                )}
-              </div>
-            )}
-
-            <div className={`p-4 rounded-lg border-2 transition-all ${
-              storageType === 'indexeddb' 
-                ? 'border-primary bg-primary/5' 
-                : 'border-border hover:border-primary/50'
-            }`}>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <Cloud className="h-5 w-5 text-muted-foreground" />
-                  <div>
-                    <p className="font-medium">Browser Storage (IndexedDB)</p>
-                    <p className="text-xs text-muted-foreground">Large capacity, works in all browsers</p>
-                  </div>
-                </div>
-                {storageType !== 'indexeddb' && (
-                  <Button variant="outline" size="sm" onClick={handleSwitchToIndexedDB} disabled={isStorageLoading}>
-                    Use This
-                  </Button>
-                )}
-                {storageType === 'indexeddb' && (
-                  <CheckCircle2 className="h-5 w-5 text-primary" />
-                )}
-              </div>
+        <CardContent>
+          <div className="flex items-center gap-4 p-4 rounded-lg border-2 border-primary bg-primary/5">
+            <Cloud className="h-6 w-6 text-primary shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="font-medium">Supabase Cloud</p>
+              <p className="text-xs text-muted-foreground">
+                Encrypted at rest · Secured by Row-Level Security · Accessible on any device
+              </p>
             </div>
+            <CheckCircle2 className="h-5 w-5 text-primary shrink-0" />
           </div>
-
-          {!isFileSystemSupported() && (
-            <p className="text-xs text-muted-foreground bg-muted/50 p-3 rounded-lg">
-              💡 Use Chrome or Edge to enable local folder storage
-            </p>
-          )}
         </CardContent>
       </Card>
 
@@ -322,12 +118,12 @@ export function DataSettings({
       <Card>
         <CardHeader>
           <CardTitle>Storage Overview</CardTitle>
-          <CardDescription>Manage your locally stored data</CardDescription>
+          <CardDescription>Summary of your cloud data</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="flex items-center justify-between p-4 bg-muted/50 rounded-lg">
             <div>
-              <div className="text-2xl font-bold">{formatBytes(storageUsed)}</div>
+              <div className="text-2xl font-bold">{formatBytes(totalSize)}</div>
               <div className="text-sm text-muted-foreground">
                 {conversations.length} conversation{conversations.length !== 1 ? 's' : ''} stored
               </div>
@@ -349,9 +145,9 @@ export function DataSettings({
           ) : (
             <div className="space-y-2 max-h-[400px] overflow-y-auto scrollbar-thin">
               {conversations
-                .map((conv) => ({ ...conv, size: getConversationSize(conv) }))
+                .map(conv => ({ ...conv, size: getConversationSize(conv) }))
                 .sort((a, b) => b.size - a.size)
-                .map((conv) => (
+                .map(conv => (
                   <div
                     key={conv.id}
                     className="flex items-center justify-between p-3 bg-muted/30 hover:bg-muted/50 border border-border rounded-lg group transition-colors"
@@ -378,36 +174,36 @@ export function DataSettings({
         </CardContent>
       </Card>
 
-      {/* Actions */}
+      {/* Data Actions */}
       <Card>
         <CardHeader>
           <CardTitle>Data Actions</CardTitle>
-          <CardDescription>Export or clear your data</CardDescription>
+          <CardDescription>Export a backup or clear your data</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
             <Button variant="outline" className="gap-2" onClick={onExportAllData}>
               <Download className="h-4 w-4" />
-              Export Data
+              Export Backup
             </Button>
-            
+
             <Input
               type="file"
               ref={fileInputRef}
               accept=".json"
-              onChange={handleImportData}
+              onChange={handleImportFile}
               className="hidden"
             />
-            <Button 
-              variant="outline" 
-              className="gap-2" 
+            <Button
+              variant="outline"
+              className="gap-2"
               onClick={() => fileInputRef.current?.click()}
             >
               <Upload className="h-4 w-4" />
               Import Backup
             </Button>
           </div>
-          
+
           <Button
             variant="outline"
             className="w-full gap-2 text-orange-500 hover:text-orange-600 hover:border-orange-400"
@@ -424,11 +220,21 @@ export function DataSettings({
               Delete All Data
             </Button>
             <p className="text-xs text-muted-foreground text-center mt-2">
-              This will remove all settings, conversations, and summaries
+              Removes all conversations, settings, and API keys from the cloud
             </p>
           </div>
         </CardContent>
       </Card>
+
+      {/* Import confirmation dialog */}
+      <ConfirmDialog
+        open={importDialogOpen}
+        onOpenChange={setImportDialogOpen}
+        title="Import backup?"
+        description={`This will add ${pendingImportSummary} to your account. Existing data is not replaced.`}
+        confirmLabel="Import"
+        onConfirm={confirmImport}
+      />
     </div>
   );
 }

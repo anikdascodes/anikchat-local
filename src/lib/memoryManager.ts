@@ -1,17 +1,18 @@
 /**
- * Memory Manager - Lightweight version
- * 
- * Embedding/RAG is OPTIONAL and only loaded when:
- * 1. User explicitly enables it in settings
- * 2. Conversation exceeds threshold
- * 
- * Default: Simple summarization (no heavy ML models)
+ * Memory Manager — in-session only
+ *
+ * Embeddings and summaries live in memory for the current page session.
+ * Conversation summaries persist durably via the `summary` field on the
+ * Conversation object, which is saved to Supabase by useConversations.ts.
+ *
+ * Nothing is written to localStorage, IndexedDB, or any local store.
  */
 
 import { Message } from '@/types/chat';
 import { estimateTokens } from './tokenizer';
-import { storageService } from './storageService';
 import { logger } from './logger';
+
+// ─── Types ───────────────────────────────────────────────────
 
 interface StoredEmbedding {
   messageId: string;
@@ -19,6 +20,7 @@ interface StoredEmbedding {
   embedding: number[];
   content: string;
   timestamp: number;
+  score?: number;
 }
 
 interface ConversationSummary {
@@ -29,50 +31,41 @@ interface ConversationSummary {
   updatedAt: number;
 }
 
-interface ConversationEmbeddings {
-  conversationId: string;
-  embeddings: StoredEmbedding[];
-}
-
 interface EmbeddingModel {
   getEmbedding: (text: string) => Promise<number[]>;
 }
 
-// Lazy-loaded embedding model (only when needed)
-let embeddingModel: EmbeddingModel | null = null;
-let isModelLoading = false;
-let modelLoadFailed = false;
+// ─── In-memory stores ────────────────────────────────────────
 
-// Check if RAG is enabled (user preference)
-function isRAGEnabled(): boolean {
-  try {
-    return localStorage.getItem('anikchat-rag-enabled') === 'true';
-  } catch (error) {
-    logger.debug('localStorage get failed:', error);
-    return false;
-  }
-}
+const embeddingStore  = new Map<string, StoredEmbedding[]>();   // conversationId → embeddings
+const summaryStore    = new Map<string, ConversationSummary>(); // conversationId → summary
+
+// ─── RAG feature flag ────────────────────────────────────────
+
+// Default to false; toggled from AdvancedSettings. Not persisted
+// (users who need RAG can re-enable after page load — it's an opt-in power feature).
+let ragEnabled = false;
+
+export function isRAGEnabled(): boolean { return ragEnabled; }
 
 export function setRAGEnabled(enabled: boolean): void {
-  try {
-    localStorage.setItem('anikchat-rag-enabled', enabled ? 'true' : 'false');
-  } catch (error) {
-    logger.debug('localStorage set failed:', error);
-  }
+  ragEnabled = enabled;
   if (!enabled) {
-    // Unload model to free memory
-    embeddingModel = null;
+    embeddingModel = null; // unload model to free memory
   }
 }
 
-/**
- * Lazy load embedding model - ONLY when RAG is enabled
- */
+// ─── Embedding model (lazy-loaded) ───────────────────────────
+
+let embeddingModel: EmbeddingModel | null = null;
+let isModelLoading  = false;
+let modelLoadFailed = false;
+
 async function getEmbeddingModel(): Promise<EmbeddingModel | null> {
-  if (!isRAGEnabled()) return null;
-  if (modelLoadFailed) return null;
-  if (embeddingModel) return embeddingModel;
-  
+  if (!ragEnabled)        return null;
+  if (modelLoadFailed)    return null;
+  if (embeddingModel)     return embeddingModel;
+
   if (isModelLoading) {
     while (isModelLoading) await new Promise(r => setTimeout(r, 100));
     return embeddingModel;
@@ -87,7 +80,7 @@ async function getEmbeddingModel(): Promise<EmbeddingModel | null> {
     logger.info('Embedding model loaded');
     return embeddingModel;
   } catch (e) {
-    logger.warn('Embedding model unavailable, using basic context', e);
+    logger.warn('Embedding model unavailable — RAG disabled', e);
     modelLoadFailed = true;
     return null;
   } finally {
@@ -100,8 +93,8 @@ async function generateEmbedding(text: string): Promise<number[] | null> {
   if (!model) return null;
   try {
     return await model.getEmbedding(text);
-  } catch (error) {
-    logger.debug('Embedding generation failed:', error);
+  } catch (e) {
+    logger.debug('Embedding generation failed:', e);
     return null;
   }
 }
@@ -110,110 +103,101 @@ function cosineSimilarity(a: number[], b: number[]): number {
   if (a.length !== b.length) return 0;
   let dot = 0, normA = 0, normB = 0;
   for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i];
+    dot   += a[i] * b[i];
     normA += a[i] * a[i];
     normB += b[i] * b[i];
   }
   return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
+// ─── Public API ──────────────────────────────────────────────
+
 /**
- * Store message embedding (only if RAG enabled)
+ * Store a message embedding in memory (only when RAG is enabled).
  */
 export async function storeMessage(conversationId: string, message: Message): Promise<void> {
-  if (!isRAGEnabled()) return;
+  if (!ragEnabled) return;
   if (message.role === 'system' || message.content.length <= 10) return;
 
   const embedding = await generateEmbedding(message.content);
   if (!embedding) return;
 
-  const storedEmb: StoredEmbedding = {
-    messageId: message.id,
-    conversationId,
-    embedding,
-    content: message.content.slice(0, 500),
-    timestamp: new Date(message.timestamp).getTime(),
-  };
-
-  try {
-    const existing = await storageService.getEmbedding<ConversationEmbeddings>(conversationId);
-    const embeddings = existing?.embeddings || [];
-    
-    if (!embeddings.find(e => e.messageId === message.id)) {
-      embeddings.push(storedEmb);
-      await storageService.saveEmbedding(conversationId, { conversationId, embeddings });
-    }
-  } catch (e) {
-    logger.debug('Failed to store embedding:', e);
+  const bucket = embeddingStore.get(conversationId) ?? [];
+  if (!bucket.find(e => e.messageId === message.id)) {
+    bucket.push({
+      messageId: message.id,
+      conversationId,
+      embedding,
+      content: message.content.slice(0, 500),
+      timestamp: new Date(message.timestamp).getTime(),
+    });
+    embeddingStore.set(conversationId, bucket);
   }
 }
 
 /**
- * Retrieve relevant messages (only if RAG enabled and embeddings exist)
+ * Retrieve the most relevant older messages for the current query.
  */
 export async function retrieveRelevantMessages(
   conversationId: string,
   query: string,
-  topK: number = 5,
-  excludeMessageIds: string[] = []
+  topK = 5,
+  excludeMessageIds: string[] = [],
 ): Promise<StoredEmbedding[]> {
-  if (!isRAGEnabled()) return [];
-  
+  if (!ragEnabled) return [];
+
   const queryEmbedding = await generateEmbedding(query);
   if (!queryEmbedding) return [];
 
-  const data = await storageService.getEmbedding<ConversationEmbeddings>(conversationId);
-  if (!data?.embeddings?.length) return [];
-
-  return data.embeddings
+  const bucket = embeddingStore.get(conversationId) ?? [];
+  return bucket
     .filter(e => !excludeMessageIds.includes(e.messageId))
-    .map(e => ({ ...e, score: cosineSimilarity(queryEmbedding, e.embedding) }))
-    .sort((a, b) => b.score - a.score)
+    .map(e   => ({ ...e, score: cosineSimilarity(queryEmbedding, e.embedding) }))
+    .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
     .slice(0, topK);
 }
 
 /**
- * Get conversation summary (lightweight, always available)
+ * Get the in-session conversation summary (populated by saveConversationSummary).
+ * Returns null on page load — the caller must fall back to conv.summary from Supabase.
  */
 export async function getConversationSummary(conversationId: string): Promise<ConversationSummary | null> {
-  return storageService.getSummary<ConversationSummary>(conversationId);
+  return summaryStore.get(conversationId) ?? null;
 }
 
 /**
- * Save conversation summary
+ * Save a conversation summary to the in-session cache.
+ * The durable copy is persisted automatically through the conversation object
+ * (conv.summary) which is saved to Supabase by useConversations.ts.
  */
 export async function saveConversationSummary(
   conversationId: string,
   summary: string,
-  summarizedUpToTimestamp: number
+  summarizedUpToTimestamp: number,
 ): Promise<void> {
-  const summaryObj: ConversationSummary = {
+  summaryStore.set(conversationId, {
     conversationId,
     summary,
     summarizedUpToTimestamp,
     tokenCount: estimateTokens(summary),
     updatedAt: Date.now(),
-  };
-  await storageService.saveSummary(conversationId, summaryObj);
+  });
 }
 
 /**
- * Delete conversation memory
+ * Remove a conversation's in-memory data when the conversation is deleted.
  */
 export async function deleteConversationMemory(conversationId: string): Promise<void> {
-  await storageService.deleteEmbedding(conversationId);
+  embeddingStore.delete(conversationId);
+  summaryStore.delete(conversationId);
 }
 
-/**
- * Preload embedding model (only if RAG enabled)
- */
 export async function preloadEmbeddingModel(): Promise<boolean> {
-  if (!isRAGEnabled()) return false;
+  if (!ragEnabled) return false;
   try {
     await getEmbeddingModel();
     return embeddingModel !== null;
-  } catch (error) {
-    logger.debug('Embedding model preload failed:', error);
+  } catch {
     return false;
   }
 }
@@ -223,5 +207,5 @@ export function isEmbeddingModelLoaded(): boolean {
 }
 
 export function isRAGAvailable(): boolean {
-  return isRAGEnabled() && !modelLoadFailed;
+  return ragEnabled && !modelLoadFailed;
 }

@@ -3,8 +3,8 @@
  * Search across all conversations using text matching and optional embeddings
  */
 
-import { storageService } from './storageService';
-import { Conversation, Message } from '@/types/chat';
+import * as supabaseService from './supabaseService';
+import { Conversation } from '@/types/chat';
 
 export interface SearchResult {
   conversationId: string;
@@ -25,10 +25,10 @@ export async function searchConversations(query: string, limit = 20): Promise<Se
   const queryLower = query.toLowerCase();
   const results: SearchResult[] = [];
 
-  const convIds = await storageService.listConversations();
+  const convIds = await supabaseService.listConversations();
   
   for (const id of convIds) {
-    const conv = await storageService.getConversation<Conversation>(id);
+    const conv = await supabaseService.getConversation(id);
     if (!conv) continue;
 
     for (const msg of conv.messages) {

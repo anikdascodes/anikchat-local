@@ -3,7 +3,8 @@
  * Backup and restore conversations
  */
 
-import { storageService } from './storageService';
+import * as supabaseService from './supabaseService';
+import { supabase } from '@/integrations/supabase/client';
 import { APIConfig, Conversation } from '@/types/chat';
 import { redactConfigForExport } from '@/lib/exportRedaction';
 
@@ -18,15 +19,18 @@ export interface ExportData {
  * Export all conversations as JSON
  */
 export async function exportAllData(): Promise<void> {
-  const convIds = await storageService.listConversations();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Not authenticated');
+
+  const convIds = await supabaseService.listConversations();
   const conversations: Conversation[] = [];
 
   for (const id of convIds) {
-    const conv = await storageService.getConversation<Conversation>(id);
+    const conv = await supabaseService.getConversation(id);
     if (conv) conversations.push(conv);
   }
 
-  const config = await storageService.getConfig<APIConfig>();
+  const config = await supabaseService.getConfig(user.id);
 
   const exportData: ExportData = {
     version: 1,
@@ -73,6 +77,9 @@ export async function exportAsMarkdown(conversation: Conversation): Promise<void
  * Import conversations from JSON backup
  */
 export async function importData(file: File): Promise<{ imported: number; skipped: number }> {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Not authenticated');
+
   const text = await file.text();
   const data = JSON.parse(text) as ExportData;
 
@@ -84,12 +91,12 @@ export async function importData(file: File): Promise<{ imported: number; skippe
   let skipped = 0;
 
   for (const conv of data.conversations) {
-    const existing = await storageService.getConversation(conv.id);
+    const existing = await supabaseService.getConversation(conv.id);
     if (existing) {
       skipped++;
       continue;
     }
-    await storageService.saveConversation(conv.id, conv);
+    await supabaseService.saveConversation(conv, user.id);
     imported++;
   }
 

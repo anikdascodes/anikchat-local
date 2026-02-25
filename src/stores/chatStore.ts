@@ -161,9 +161,10 @@ export const useChatStore = create<ChatState>()(
       }),
       {
         name: 'anikchat-store',
-        partialize: (state) => ({ 
-          config: state.config,
-          activeConversationId: state.activeConversationId
+        // IMPORTANT: never persist config (contains encrypted API keys).
+        // Config is loaded from Supabase by useConfig.ts.
+        partialize: (state) => ({
+          activeConversationId: state.activeConversationId,
         }),
       }
     )

@@ -1,148 +1,132 @@
 /**
- * Secure API Key Storage
- * 
- * Uses Web Crypto API to encrypt API keys at rest.
- * Keys are encrypted with a device-specific key derived from
- * a combination of factors (not perfect, but better than plaintext).
+ * API Key Encryption
+ *
+ * Uses PBKDF2 to derive a deterministic AES-GCM encryption key from the user's
+ * unique account ID. This means the SAME key is produced on every device —
+ * enabling true cross-device access with no key sync needed.
+ *
+ * Security model:
+ *   In transit    — HTTPS / TLS
+ *   At rest       — Supabase infrastructure AES-256 + our own AES-GCM layer
+ *   Key material  — stored NOWHERE; re-derived on each page load from userId
+ *   Extractable   — false; raw key bytes are never accessible to any JS code
+ *
+ * Format: "enc:v2:<iv_base64>:<ciphertext_base64>"
+ * Legacy "enc:<combined>" format → returns '' (user must re-enter key).
  */
 
 import { logger } from './logger';
 
-const ENCRYPTION_KEY_NAME = 'anikchat-encryption-key';
+// In-memory cache for the current session. Cleared on sign-out.
+const keyCache = new Map<string, CryptoKey>();
 
-async function getOrCreateEncryptionKey(): Promise<CryptoKey> {
-  // Try to get existing key from IndexedDB
-  const stored = await getStoredKey();
-  if (stored) return stored;
+// ─── Key derivation ──────────────────────────────────────────
 
-  // Generate new key
-  const key = await crypto.subtle.generateKey(
-    { name: 'AES-GCM', length: 256 },
-    true, // extractable for storage
-    ['encrypt', 'decrypt']
+/**
+ * Derive an AES-GCM CryptoKey from the user's account ID.
+ * PBKDF2 with 200 000 iterations ensures brute-force resistance.
+ * Cached in memory for the session.
+ */
+export async function deriveUserKey(userId: string): Promise<CryptoKey> {
+  const cached = keyCache.get(userId);
+  if (cached) return cached;
+
+  const enc = new TextEncoder();
+
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw',
+    enc.encode(userId),
+    'PBKDF2',
+    false,
+    ['deriveKey'],
   );
 
-  // Store for future use
-  await storeKey(key);
+  const key = await crypto.subtle.deriveKey(
+    {
+      name: 'PBKDF2',
+      salt: enc.encode('anikchat-api-keys-v2'),
+      iterations: 200_000,
+      hash: 'SHA-256',
+    },
+    keyMaterial,
+    { name: 'AES-GCM', length: 256 },
+    false, // non-extractable
+    ['encrypt', 'decrypt'],
+  );
+
+  keyCache.set(userId, key);
   return key;
 }
 
-async function getStoredKey(): Promise<CryptoKey | null> {
-  return new Promise((resolve) => {
-    const request = indexedDB.open('anikchat-keys', 1);
-    request.onerror = () => resolve(null);
-    request.onupgradeneeded = (e) => {
-      const db = (e.target as IDBOpenDBRequest).result;
-      if (!db.objectStoreNames.contains('keys')) {
-        db.createObjectStore('keys');
-      }
-    };
-    request.onsuccess = () => {
-      const db = request.result;
-      const tx = db.transaction('keys', 'readonly');
-      const store = tx.objectStore('keys');
-      const getReq = store.get(ENCRYPTION_KEY_NAME);
-      getReq.onsuccess = async () => {
-        if (getReq.result) {
-          try {
-            const key = await crypto.subtle.importKey(
-              'raw',
-              getReq.result,
-              { name: 'AES-GCM', length: 256 },
-              false,
-              ['encrypt', 'decrypt']
-            );
-            resolve(key);
-          } catch (error) {
-            logger.debug('Failed to import stored encryption key:', error);
-            resolve(null);
-          }
-        } else {
-          resolve(null);
-        }
-      };
-      getReq.onerror = () => resolve(null);
-    };
-  });
+/** Clear the session key cache on sign-out. */
+export function clearKeyCache(): void {
+  keyCache.clear();
 }
 
-async function storeKey(key: CryptoKey): Promise<void> {
-  const exported = await crypto.subtle.exportKey('raw', key);
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open('anikchat-keys', 1);
-    request.onerror = () => reject(request.error);
-    request.onsuccess = () => {
-      const db = request.result;
-      const tx = db.transaction('keys', 'readwrite');
-      const store = tx.objectStore('keys');
-      store.put(new Uint8Array(exported), ENCRYPTION_KEY_NAME);
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-    };
-  });
-}
+// ─── Encrypt / Decrypt ───────────────────────────────────────
 
 /**
- * Encrypt an API key
+ * Encrypt an API key for a given user.
+ * Returns "enc:v2:<iv_b64>:<ciphertext_b64>", or '' on failure.
+ * NEVER falls back to returning plaintext.
  */
-export async function encryptApiKey(apiKey: string): Promise<string> {
-  if (!apiKey) return '';
-  
+export async function encryptApiKey(apiKey: string, userId: string): Promise<string> {
+  if (!apiKey || !userId) return '';
+
   try {
-    const key = await getOrCreateEncryptionKey();
+    const key = await deriveUserKey(userId);
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const encoded = new TextEncoder().encode(apiKey);
-    
-    const encrypted = await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv },
-      key,
-      encoded
-    );
 
-    // Combine IV + encrypted data and encode as base64
-    const combined = new Uint8Array(iv.length + encrypted.byteLength);
-    combined.set(iv);
-    combined.set(new Uint8Array(encrypted), iv.length);
-    
-    return 'enc:' + btoa(String.fromCharCode(...combined));
+    const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoded);
+
+    const ivB64   = btoa(String.fromCharCode(...iv));
+    const dataB64 = btoa(String.fromCharCode(...new Uint8Array(encrypted)));
+
+    return `enc:v2:${ivB64}:${dataB64}`;
   } catch (error) {
-    logger.debug('Failed to encrypt API key:', error);
-    // Fallback to plaintext if encryption fails
-    return apiKey;
+    logger.error('encryptApiKey failed — key not stored:', error);
+    return '';
   }
 }
 
 /**
- * Decrypt an API key
+ * Decrypt an API key.
+ *  "enc:v2:..."  — new cross-device PBKDF2 format
+ *  "enc:..."     — legacy device-local format → '' (cannot decrypt cross-device)
+ *  anything else — treated as plaintext (e.g. Ollama with no key)
  */
-export async function decryptApiKey(encryptedKey: string): Promise<string> {
-  if (!encryptedKey) return '';
-  if (!encryptedKey.startsWith('enc:')) return encryptedKey; // Not encrypted
-  
+export async function decryptApiKey(encryptedKey: string, userId: string): Promise<string> {
+  if (!encryptedKey || !userId) return '';
+  if (!encryptedKey.startsWith('enc:')) return encryptedKey;
+
   try {
-    const key = await getOrCreateEncryptionKey();
-    const combined = Uint8Array.from(atob(encryptedKey.slice(4)), c => c.charCodeAt(0));
-    
-    const iv = combined.slice(0, 12);
-    const data = combined.slice(12);
-    
-    const decrypted = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv },
-      key,
-      data
-    );
+    if (encryptedKey.startsWith('enc:v2:')) {
+      const rest  = encryptedKey.slice(7);
+      const colon = rest.indexOf(':');
+      if (colon === -1) return '';
 
-    return new TextDecoder().decode(decrypted);
+      const ivB64   = rest.slice(0, colon);
+      const dataB64 = rest.slice(colon + 1);
+
+      const iv   = Uint8Array.from(atob(ivB64),   c => c.charCodeAt(0));
+      const data = Uint8Array.from(atob(dataB64),  c => c.charCodeAt(0));
+
+      const key = await deriveUserKey(userId);
+      const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data);
+      return new TextDecoder().decode(decrypted);
+    }
+
+    // Legacy device-local format — unable to decrypt cross-device
+    logger.warn('Legacy encrypted key detected — user should re-enter API key.');
+    return '';
   } catch (error) {
-    logger.debug('Failed to decrypt API key:', error);
-    // Return as-is if decryption fails
-    return encryptedKey.startsWith('enc:') ? '' : encryptedKey;
+    logger.error('decryptApiKey failed:', error);
+    return '';
   }
 }
 
-/**
- * Check if a key is encrypted
- */
+/** Returns true if the string has an encryption marker. */
 export function isEncrypted(key: string): boolean {
   return key.startsWith('enc:');
 }

@@ -3,8 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import {
   Plus, MessageSquare, Trash2, Settings, Download, Menu, X,
   Pencil, Check, XCircle, Search, FolderPlus, ChevronRight,
-  ChevronDown, Folder, MoreHorizontal, FolderOpen, Video
+  ChevronDown, Folder, MoreHorizontal, FolderOpen, Video, LogOut
 } from 'lucide-react';
+import { useAuth } from '@/hooks/useAuth';
 import { Conversation, ConversationFolder, generateId } from '@/types/chat';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -36,6 +37,28 @@ const FOLDER_COLORS = [
   { name: 'Red', value: 'bg-red-500' },
   { name: 'Cyan', value: 'bg-cyan-500' },
 ];
+
+// User footer with email + sign-out button
+function UserFooter() {
+  const { user, signOut } = useAuth();
+  if (!user) return null;
+  const initials = (user.email ?? 'U').slice(0, 2).toUpperCase();
+  return (
+    <div className="flex items-center gap-2 px-3 py-2 mt-1 rounded-xl border border-sidebar-border bg-sidebar-accent/30">
+      <div className="flex-shrink-0 w-7 h-7 rounded-full bg-primary/20 flex items-center justify-center text-[11px] font-semibold text-primary">
+        {initials}
+      </div>
+      <span className="flex-1 truncate text-xs text-muted-foreground">{user.email}</span>
+      <button
+        onClick={signOut}
+        className="flex-shrink-0 p-1 rounded hover:bg-destructive/10 hover:text-destructive transition-colors"
+        title="Sign out"
+      >
+        <LogOut className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  );
+}
 
 interface ConversationSidebarProps {
   conversations: Conversation[];
@@ -748,6 +771,7 @@ export const ConversationSidebar = memo(function ConversationSidebar({
             <span className="flex-1 text-left text-muted-foreground group-hover:text-foreground transition-colors">Settings</span>
             <kbd className="px-1.5 py-0.5 text-[10px] bg-sidebar-accent rounded font-mono text-muted-foreground">⌘,</kbd>
           </Button>
+          <UserFooter />
         </div>
       </aside>
 

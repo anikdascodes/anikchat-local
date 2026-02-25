@@ -6,7 +6,8 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { APIConfig, Conversation, defaultConfig } from '@/types/chat';
 import { useConfig } from '@/hooks/useConfig';
-import { storageService } from '@/lib/storageService';
+import { useAuth } from '@/hooks/useAuth';
+import * as supabaseService from '@/lib/supabaseService';
 import { toast } from 'sonner';
 import { redactConfigForExport } from '@/lib/exportRedaction';
 import { logger } from '@/lib/logger';
@@ -19,15 +20,6 @@ import {
 } from '@/components/settings';
 
 function Settings() {
-  const safeLocalStorageGet = (key: string): string | null => {
-    try {
-      return localStorage.getItem(key);
-    } catch (error) {
-      logger.debug('localStorage get failed:', error);
-      return null;
-    }
-  };
-
   const safeLocalStorageRemove = (key: string): void => {
     try {
       localStorage.removeItem(key);
@@ -37,6 +29,7 @@ function Settings() {
   };
 
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [config, setConfig] = useConfig<APIConfig>(defaultConfig);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [saved, setSaved] = useState(false);
@@ -44,28 +37,24 @@ function Settings() {
   const [clearConversationsOpen, setClearConversationsOpen] = useState(false);
   const [clearAllDataOpen, setClearAllDataOpen] = useState(false);
 
-  // Load conversations from storageService
+  // Load conversation list from Supabase
   useEffect(() => {
+    if (!user) return;
     const loadConversations = async () => {
       try {
-        const ids = await storageService.listConversations();
-        
-        // Optimization: Parallel load conversations
+        const ids = await supabaseService.listConversations();
+        // Load the first 20 for the settings data view (metadata only)
         const convs = (await Promise.all(
-          ids.map(id => storageService.getConversation<Conversation>(id))
+          ids.slice(0, 20).map(id => supabaseService.getConversation(id))
         )).filter((c): c is Conversation => !!c);
-
         convs.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
         setConversations(convs);
       } catch (error) {
-        logger.debug('Failed to load conversations from storage, falling back to localStorage:', error);
-        // Fallback to localStorage
-        const local = safeLocalStorageGet('openchat-conversations');
-        if (local) setConversations(JSON.parse(local));
+        logger.debug('Failed to load conversations from Supabase in Settings:', error);
       }
     };
     loadConversations();
-  }, []);
+  }, [user]);
 
   const handleConfigChange = useCallback((newConfig: APIConfig) => {
     setConfig(newConfig);
@@ -107,29 +96,29 @@ function Settings() {
 
   const confirmDeleteConversation = useCallback(async () => {
     if (!deleteConversationId) return;
-    await storageService.deleteConversation(deleteConversationId);
+    await supabaseService.deleteConversation(deleteConversationId);
     setConversations((prev) => prev.filter((c) => c.id !== deleteConversationId));
     setDeleteConversationId(null);
     toast.success('Conversation deleted');
   }, [deleteConversationId]);
 
   const confirmClearConversations = useCallback(async () => {
-    for (const conv of conversations) {
-      await storageService.deleteConversation(conv.id);
-    }
+    // Delete all via Supabase (cascade removes messages)
+    await Promise.all(conversations.map(c => supabaseService.deleteConversation(c.id)));
     setConversations([]);
     setClearConversationsOpen(false);
     toast.success('All conversations deleted');
   }, [conversations]);
 
   const confirmClearAllData = useCallback(async () => {
-    await storageService.clearAll();
+    if (user) await supabaseService.deleteAllUserData(user.id);
     safeLocalStorageRemove('openchat-config');
-    safeLocalStorageRemove('openchat-conversations');
+    safeLocalStorageRemove('openchat-conversations-metadata');
+    safeLocalStorageRemove('openchat-active-conversation');
     setClearAllDataOpen(false);
     toast.success('All data cleared');
     window.location.reload();
-  }, []);
+  }, [user]);
 
   const conversationToDelete = deleteConversationId
     ? conversations.find((c) => c.id === deleteConversationId)
@@ -155,14 +144,16 @@ function Settings() {
       const existingIds = new Set(conversations.map(c => c.id));
       const newConvs = data.conversations.filter(c => !existingIds.has(c.id));
       
-      // Save new conversations to storage
-      for (const conv of newConvs) {
-        await storageService.saveConversation(conv.id, conv);
+      // Save new conversations to Supabase
+      if (user) {
+        for (const conv of newConvs) {
+          await supabaseService.saveConversation(conv, user.id);
+        }
       }
       
       setConversations(prev => [...newConvs, ...prev]);
     }
-  }, [setConfig, conversations]);
+  }, [setConfig, conversations, user]);
 
   return (
     <div className="min-h-screen bg-background">

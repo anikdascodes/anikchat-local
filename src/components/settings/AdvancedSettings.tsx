@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
@@ -8,7 +8,6 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { APIConfig, defaultConfig } from '@/types/chat';
 import { toast } from 'sonner';
 import { setRAGEnabled, preloadEmbeddingModel, isEmbeddingModelLoaded } from '@/lib/memoryManager';
-import { logger } from '@/lib/logger';
 
 interface AdvancedSettingsProps {
   config: APIConfig;
@@ -24,14 +23,8 @@ const parameterConfigs = [
 ] as const;
 
 export function AdvancedSettings({ config, onConfigChange }: AdvancedSettingsProps) {
-  const [ragEnabled, setRagEnabled] = useState(() => {
-    try {
-      return localStorage.getItem('anikchat-rag-enabled') === 'true';
-    } catch (error) {
-      logger.debug('localStorage get failed:', error);
-      return false;
-    }
-  });
+  // RAG preference is in-memory only (no localStorage). Defaults to off.
+  const [ragEnabled, setRagEnabled] = useState(false);
   const [ragLoading, setRagLoading] = useState(false);
   const [resetDialogOpen, setResetDialogOpen] = useState(false);
 

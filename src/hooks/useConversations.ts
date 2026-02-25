@@ -1,10 +1,11 @@
-import { useState, useEffect, useCallback, useRef, useTransition, startTransition } from 'react';
+import { useState, useEffect, useCallback, useRef, startTransition } from 'react';
 import { toast } from 'sonner';
 import { Conversation, generateId } from '@/types/chat';
 import { exportAsMarkdown, downloadFile } from '@/lib/export';
-import { storageService } from '@/lib/storageService';
+import * as supabaseService from '@/lib/supabaseService';
 import { deleteConversationMemory } from '@/lib/memoryManager';
 import { useStreamingStore } from '@/stores/streamingStore';
+import { useAuth } from '@/hooks/useAuth';
 import { logger } from '@/lib/logger';
 import { handleStorageError } from '@/lib/errorHandler';
 
@@ -24,22 +25,7 @@ interface UseConversationsReturn {
 }
 
 export function useConversations(): UseConversationsReturn {
-  const safeLocalStorageGet = (key: string): string | null => {
-    try {
-      return localStorage.getItem(key);
-    } catch (error) {
-      logger.debug('localStorage get failed:', error);
-      return null;
-    }
-  };
-
-  const safeLocalStorageSet = (key: string, value: string): void => {
-    try {
-      localStorage.setItem(key, value);
-    } catch (error) {
-      logger.debug('localStorage set failed:', error);
-    }
-  };
+  const { user } = useAuth();
 
   const [conversations, setConversationsState] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
@@ -53,78 +39,35 @@ export function useConversations(): UseConversationsReturn {
     : conversations.find((c) => c.id === activeConversationId);
   const isStreaming = useStreamingStore(state => state.isLoading);
 
-  // Load conversations from storage on mount
+  // Load conversations from Supabase on mount
   useEffect(() => {
+    if (!user) return;
     const loadConversations = async () => {
       try {
-        // 1. Try metadata cache first for instant sidebar render
-        const cachedMetadata = safeLocalStorageGet('openchat-conversations-metadata');
-        let initialConvs: Conversation[] = [];
-
-        if (cachedMetadata) {
-          try {
-            const parsed: unknown = JSON.parse(cachedMetadata);
-            if (Array.isArray(parsed)) {
-              type ConvMeta = Pick<Conversation, 'id' | 'title' | 'createdAt' | 'updatedAt' | 'folderId'>;
-              const metadata = parsed as Array<Partial<ConvMeta>>;
-              initialConvs = metadata
-                .filter((m): m is Partial<ConvMeta> & { id: string } => typeof m.id === 'string')
-                .map((m) => ({
-                  id: m.id,
-                  title: typeof m.title === 'string' ? m.title : 'Chat',
-                  messages: [],
-                  createdAt: m.createdAt ? new Date(String(m.createdAt)) : new Date(),
-                  updatedAt: m.updatedAt ? new Date(String(m.updatedAt)) : new Date(),
-                  folderId: typeof m.folderId === 'string' ? m.folderId : undefined,
-                  isSkeleton: true
-                }));
-            }
-            setConversationsState(initialConvs);
-          } catch (error) {
-            logger.debug('Failed to parse conversation metadata cache:', error);
-          }
-        }
-
-        // 2. Load IDs from storage to see what's actually there
-        const ids = await storageService.listConversations();
+        // Load IDs from Supabase, pre-fetch the 5 most recent conversations
+        const ids = await supabaseService.listConversations();
         if (ids.length > 0) {
-          // 3. Optimization: Instead of loading EVERYTHING, we only load the active one
-          // and any conversation that was updated recently (top 5) to ensure titles are fresh.
-          const lastActiveId = safeLocalStorageGet('openchat-active-conversation');
-          const targetIds = Array.from(new Set([
-            ...(lastActiveId ? [lastActiveId] : []),
-            ...ids.slice(0, 5)
-          ]));
+          const targetIds = ids.slice(0, 5);
 
           const loadedConvs = (await Promise.all(
-            targetIds.map(id => storageService.getConversation<Conversation>(id))
+            targetIds.map(id => supabaseService.getConversation(id))
           )).filter((c): c is Conversation => !!c);
 
           setConversationsState(prev => {
             const map = new Map(prev.map(c => [c.id, c]));
             loadedConvs.forEach(c => map.set(c.id, c));
-
-            // Add any missing IDs as skeletons if not in cache
             ids.forEach(id => {
               if (!map.has(id)) {
                 map.set(id, {
-                  id,
-                  title: 'Chat',
-                  messages: [],
-                  createdAt: new Date(),
-                  updatedAt: new Date(),
-                  isSkeleton: true
+                  id, title: 'Chat', messages: [],
+                  createdAt: new Date(), updatedAt: new Date(), isSkeleton: true
                 });
               }
             });
-
             const final = Array.from(map.values());
             final.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
             return final;
           });
-
-          // NOTE: We intentionally do NOT auto-open the last active conversation.
-          // The app should start in a new draft chat until the user selects from history.
         }
       } catch (e) {
         handleStorageError(e, 'useConversations.load');
@@ -132,7 +75,7 @@ export function useConversations(): UseConversationsReturn {
       setIsLoaded(true);
     };
     loadConversations();
-  }, []);
+  }, [user]);
 
   // Create draft conversation if no active conversation after loading
   useEffect(() => {
@@ -148,38 +91,6 @@ export function useConversations(): UseConversationsReturn {
       setActiveConversationId(newDraft.id);
     }
   }, [isLoaded, activeConversationId, draftConversation]);
-
-  // Update active conversation tracker in localStorage
-  useEffect(() => {
-    if (!activeConversationId) return;
-    // Don't persist draft IDs (draft chats are not in history yet).
-    if (draftConversation && activeConversationId === draftConversation.id) return;
-    safeLocalStorageSet('openchat-active-conversation', activeConversationId);
-  }, [activeConversationId, draftConversation?.id]);
-
-  const metadataTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-
-  // Save metadata to localStorage with debouncing to prevent UI lag during streaming
-  useEffect(() => {
-    if (!isLoaded || isStreaming) return;
-
-    if (metadataTimeoutRef.current) clearTimeout(metadataTimeoutRef.current);
-
-    metadataTimeoutRef.current = setTimeout(() => {
-      try {
-        const metadata = conversations.map(({ id, title, createdAt, updatedAt, folderId }) => ({
-          id, title, createdAt, updatedAt, folderId
-        }));
-        safeLocalStorageSet('openchat-conversations-metadata', JSON.stringify(metadata));
-      } catch (e) {
-        logger.warn('Failed to save metadata:', e);
-      }
-    }, 5000); // Increased to 5 second debounce for metadata (very lightweight)
-
-    return () => {
-      if (metadataTimeoutRef.current) clearTimeout(metadataTimeoutRef.current);
-    };
-  }, [conversations, isLoaded, isStreaming]);
 
   // Debounced persistence for ALL conversations (active and non-active).
   // This avoids losing renames/folder changes made in the sidebar.
@@ -199,13 +110,13 @@ export function useConversations(): UseConversationsReturn {
 
       const t = setTimeout(async () => {
         try {
-          await storageService.saveConversation(conv.id, conv);
+          if (user) await supabaseService.saveConversation(conv, user.id);
           lastSavedUpdatedAtRef.current.set(conv.id, updatedAtMs);
         } catch (error) {
-          logger.debug('Failed to save conversation to storage:', error);
+          logger.debug('Failed to save conversation to Supabase:', error);
           // UI remains usable with in-memory state.
         }
-      }, 1500); // 1.5s debounce for USB stick safety
+      }, 1500); // 1.5s debounce
 
       saveTimeoutsRef.current.set(conv.id, t);
     }
@@ -247,7 +158,7 @@ export function useConversations(): UseConversationsReturn {
   const deleteConversation = useCallback(
     async (id: string) => {
       // Delete from storage
-      await storageService.deleteConversation(id);
+      await supabaseService.deleteConversation(id);
       await deleteConversationMemory(id);
 
       setConversationsState((prev) => {
@@ -292,9 +203,8 @@ export function useConversations(): UseConversationsReturn {
     // Optimization D: Lazy load messages if it's a skeleton
     const conv = conversations.find(c => c.id === id);
     if (conv && conv.isSkeleton) {
-      const fullConv = await storageService.getConversation<Conversation>(id);
+      const fullConv = await supabaseService.getConversation(id);
       if (fullConv) {
-        // Use startTransition to make the state update non-blocking
         startTransition(() => {
           setConversationsState(prev => prev.map(c => c.id === id ? fullConv : c));
         });
