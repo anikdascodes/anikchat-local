@@ -7,7 +7,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { APIConfig, Conversation, defaultConfig } from '@/types/chat';
 import { useConfig } from '@/hooks/useConfig';
 import { useAuth } from '@/hooks/useAuth';
-import * as supabaseService from '@/lib/supabaseService';
+import * as supabaseService from '@/lib/localStorageService';
 import { toast } from 'sonner';
 import { redactConfigForExport } from '@/lib/exportRedaction';
 import { logger } from '@/lib/logger';

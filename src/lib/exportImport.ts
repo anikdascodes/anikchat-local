@@ -3,7 +3,7 @@
  * Backup and restore conversations
  */
 
-import * as supabaseService from './supabaseService';
+import * as supabaseService from './localStorageService';
 import { supabase } from '@/integrations/supabase/client';
 import { APIConfig, Conversation } from '@/types/chat';
 import { redactConfigForExport } from '@/lib/exportRedaction';

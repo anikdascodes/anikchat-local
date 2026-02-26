@@ -1,37 +1,21 @@
 /**
- * useConfig — Cloud-first API configuration hook
+ * useConfig — Client-side API configuration hook
  *
  * Loads and saves:
- *   • App settings  → user_config  table (temperature, system prompt, etc.)
- *   • API keys      → user_api_keys table (AES-GCM encrypted, PBKDF2 key derived
- *                      from userId — same key on every device the user logs into)
+ *   • App settings  → IndexedDB user_config store (temperature, system prompt, etc.)
+ *   • API keys      → IndexedDB user_api_keys store (AES-GCM encrypted)
  *
- * No localStorage, no IndexedDB, no storageService.
- * Zero sensitive data leaves the Supabase cloud.
+ * All data stored locally in browser IndexedDB.
+ * No sensitive data leaves the browser.
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { supabase } from '@/lib/supabase';
+import * as storageService from '@/lib/localStorageService';
 import { encryptApiKey, decryptApiKey } from '@/lib/crypto';
 import { logger } from '@/lib/logger';
 import { APIConfig, LLMProvider } from '@/types/chat';
 import { useAuth } from './useAuth';
 
-// ─── Helpers ─────────────────────────────────────────────────
-
-/** Reconstruct the enc:v2: string from the two DB columns. */
-function buildEncKey(iv: string, encrypted: string): string {
-  return `enc:v2:${iv}:${encrypted}`;
-}
-
-/** Split "enc:v2:<iv>:<data>" back into the two column values.  */
-function splitEncKey(encKey: string): { iv: string; encrypted: string } | null {
-  if (!encKey.startsWith('enc:v2:')) return null;
-  const rest  = encKey.slice(7);
-  const colon = rest.indexOf(':');
-  if (colon === -1) return null;
-  return { iv: rest.slice(0, colon), encrypted: rest.slice(colon + 1) };
-}
 
 // ─── Hook ────────────────────────────────────────────────────
 
@@ -54,63 +38,51 @@ export function useConfig<T>(initialValue: T): [T, (value: T | ((prev: T) => T))
     };
   }, []);
 
-  // ── Load from Supabase when auth resolves ──────────────────
+  // ── Load from storage when auth resolves ──────────────────
   useEffect(() => {
     if (!user) return;
     let cancelled = false;
 
     const load = async () => {
       try {
-        const [configRes, keysRes] = await Promise.all([
-          supabase.from('user_config')
-            .select('*')
-            .eq('user_id', user.id)
-            .single(),
-          supabase.from('user_api_keys')
-            .select('*')
-            .eq('user_id', user.id),
+        const [config, providers] = await Promise.all([
+          storageService.getConfig(user.id),
+          storageService.getApiKeys(user.id),
         ]);
 
         if (cancelled) return;
 
         // Merge settings onto the initial value
-        const config = { ...(initialValue as unknown as APIConfig) };
+        const mergedConfig = { ...(initialValue as unknown as APIConfig) };
 
-        if (configRes.data) {
-          const row = configRes.data as Record<string, unknown>;
-          config.activeProviderId   = (row.active_provider_id   as string) ?? null;
-          config.activeModelId      = (row.active_model_id      as string) ?? null;
-          config.temperature        = (row.temperature          as number) ?? 0.7;
-          config.maxTokens          = (row.max_tokens           as number) ?? 4096;
-          config.topP               = (row.top_p                as number) ?? 1;
-          config.frequencyPenalty   = (row.frequency_penalty    as number) ?? 0;
-          config.presencePenalty    = (row.presence_penalty     as number) ?? 0;
-          config.systemPrompt       = (row.system_prompt        as string) ?? 'You are a helpful AI assistant.';
+        if (config) {
+          mergedConfig.activeProviderId   = config.activeProviderId   ?? null;
+          mergedConfig.activeModelId      = config.activeModelId      ?? null;
+          mergedConfig.temperature        = config.temperature        ?? 0.7;
+          mergedConfig.maxTokens          = config.maxTokens          ?? 4096;
+          mergedConfig.topP               = config.topP               ?? 1;
+          mergedConfig.frequencyPenalty   = config.frequencyPenalty   ?? 0;
+          mergedConfig.presencePenalty    = config.presencePenalty    ?? 0;
+          mergedConfig.systemPrompt       = config.systemPrompt       ?? 'You are a helpful AI assistant.';
         }
 
         // Load + decrypt provider API keys
-        if (keysRes.data && keysRes.data.length > 0) {
-          const rows = keysRes.data as Record<string, unknown>[];
-          const providers: LLMProvider[] = await Promise.all(
-            rows.map(async row => {
-              const encKey     = buildEncKey(row.iv as string, row.encrypted_key as string);
-              const plainKey   = await decryptApiKey(encKey, user.id);
+        if (providers && providers.length > 0) {
+          const decryptedProviders: LLMProvider[] = await Promise.all(
+            providers.map(async provider => {
+              const plainKey = await decryptApiKey(provider.apiKey, user.id);
               return {
-                id:           row.provider_id   as string,
-                name:         row.provider_name as string,
-                baseUrl:      row.base_url      as string,
-                apiKey:       plainKey,
-                models:       (row.models       as LLMProvider['models'])    ?? [],
-                providerType: (row.provider_type as LLMProvider['providerType']) ?? undefined,
+                ...provider,
+                apiKey: plainKey,
               };
             }),
           );
-          config.providers = providers;
-          savedProviderIds.current = new Set(providers.map(p => p.id));
+          mergedConfig.providers = decryptedProviders;
+          savedProviderIds.current = new Set(decryptedProviders.map(p => p.id));
         }
 
         if (mountedRef.current) {
-          setValue(config as unknown as T);
+          setValue(mergedConfig as unknown as T);
           setIsLoaded(true);
         }
       } catch (e) {
@@ -137,19 +109,8 @@ export function useConfig<T>(initialValue: T): [T, (value: T | ((prev: T) => T))
       try {
         const config = value as unknown as APIConfig;
 
-        // ── 1. Save settings (no keys) ─────────────────────
-        await supabase.from('user_config').upsert({
-          user_id:           user.id,
-          active_provider_id: config.activeProviderId  ?? null,
-          active_model_id:    config.activeModelId     ?? null,
-          temperature:        config.temperature       ?? 0.7,
-          max_tokens:         config.maxTokens         ?? 4096,
-          top_p:              config.topP              ?? 1,
-          frequency_penalty:  config.frequencyPenalty  ?? 0,
-          presence_penalty:   config.presencePenalty   ?? 0,
-          system_prompt:      config.systemPrompt      ?? '',
-          updated_at:         new Date().toISOString(),
-        }, { onConflict: 'user_id' });
+        // ── 1. Save settings ───────────────────────────────
+        await storageService.saveConfig(user.id, config);
 
         // ── 2. Upsert API keys ─────────────────────────────
         const currentIds = new Set<string>();
@@ -160,37 +121,25 @@ export function useConfig<T>(initialValue: T): [T, (value: T | ((prev: T) => T))
 
             // Skip providers with no key (e.g. Ollama local)
             // Still upsert the provider metadata even without a key
+            let encryptedKey = '';
             let iv = '';
-            let encrypted = '';
 
             if (provider.apiKey) {
               const encKey = await encryptApiKey(provider.apiKey, user.id);
-              if (encKey) {
-                const parts = splitEncKey(encKey);
-                if (parts) { iv = parts.iv; encrypted = parts.encrypted; }
+              if (encKey && encKey.includes(':')) {
+                const parts = encKey.split(':');
+                iv = parts[0];
+                encryptedKey = parts.slice(1).join(':');
               }
             }
 
-            await supabase.from('user_api_keys').upsert({
-              user_id:       user.id,
-              provider_id:   provider.id,
-              provider_name: provider.name,
-              base_url:      provider.baseUrl,
-              encrypted_key: encrypted,
-              iv,
-              models:        provider.models       ?? [],
-              provider_type: provider.providerType ?? null,
-              updated_at:    new Date().toISOString(),
-            }, { onConflict: 'user_id,provider_id' });
+            await storageService.saveApiKey(user.id, provider, encryptedKey, iv);
           }
 
           // ── 3. Delete removed providers ───────────────────
           const removed = [...savedProviderIds.current].filter(id => !currentIds.has(id));
           for (const removedId of removed) {
-            await supabase.from('user_api_keys')
-              .delete()
-              .eq('user_id',     user.id)
-              .eq('provider_id', removedId);
+            await storageService.deleteApiKey(user.id, removedId);
           }
 
           savedProviderIds.current = currentIds;

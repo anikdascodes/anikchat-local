@@ -3,7 +3,7 @@
  * Search across all conversations using text matching and optional embeddings
  */
 
-import * as supabaseService from './supabaseService';
+import * as supabaseService from './localStorageService';
 import { Conversation } from '@/types/chat';
 
 export interface SearchResult {

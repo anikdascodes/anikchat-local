@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
 import { ConversationFolder, Conversation, generateId } from '@/types/chat';
-import * as supabaseService from '@/lib/supabaseService';
+import * as supabaseService from '@/lib/localStorageService';
 import { useAuth } from '@/hooks/useAuth';
 import { logger } from '@/lib/logger';
 

@@ -1,5 +1,8 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
-import { Session, User, supabase } from '@/lib/supabase';
+import * as customAuth from '@/lib/customAuth';
+
+export type User = customAuth.AuthUser;
+export type Session = customAuth.AuthSession;
 
 interface AuthContextValue {
   user: User | null;
@@ -18,40 +21,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Get initial session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-      setLoading(false);
-    });
-
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-      setLoading(false);
-    });
-
-    return () => subscription.unsubscribe();
+    // Get initial session from localStorage
+    const currentSession = customAuth.getSession();
+    setSession(currentSession);
+    setUser(currentSession?.user ?? null);
+    setLoading(false);
   }, []);
 
   const signInWithEmail = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    return { error: error?.message ?? null };
+    const { error, session } = await customAuth.signIn(email, password);
+    if (!error && session) {
+      setSession(session);
+      setUser(session.user);
+    }
+    return { error };
   };
 
   const signUpWithEmail = async (email: string, password: string) => {
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        emailRedirectTo: `${window.location.origin}/`,
-      },
-    });
+    const { error, session } = await customAuth.signUp(email, password);
+    if (!error && session) {
+      setSession(session);
+      setUser(session.user);
+    }
     return {
-      error: error?.message ?? null,
-      // If no session was returned, email confirmation is required
-      needsEmailConfirmation: !error && !data.session,
+      error,
+      // Sign up completes immediately (no email confirmation needed)
+      needsEmailConfirmation: false,
     };
   };
 
@@ -59,7 +54,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Clear the in-memory encryption key cache so keys are not accessible after logout
     const { clearKeyCache } = await import('@/lib/crypto');
     clearKeyCache();
-    await supabase.auth.signOut();
+    await customAuth.signOut();
+    setSession(null);
+    setUser(null);
   };
 
   return (

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef, startTransition } from 'react
 import { toast } from 'sonner';
 import { Conversation, generateId } from '@/types/chat';
 import { exportAsMarkdown, downloadFile } from '@/lib/export';
-import * as supabaseService from '@/lib/supabaseService';
+import * as supabaseService from '@/lib/localStorageService';
 import { deleteConversationMemory } from '@/lib/memoryManager';
 import { useStreamingStore } from '@/stores/streamingStore';
 import { useAuth } from '@/hooks/useAuth';
