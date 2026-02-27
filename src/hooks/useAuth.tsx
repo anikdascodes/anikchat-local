@@ -9,7 +9,7 @@ interface AuthContextValue {
   session: Session | null;
   loading: boolean;
   signInWithEmail: (email: string, password: string) => Promise<{ error: string | null }>;
-  signUpWithEmail: (email: string, password: string) => Promise<{ error: string | null; needsEmailConfirmation: boolean }>;
+  signUpWithEmail: (email: string, password: string) => Promise<{ error: string | null; needsEmailConfirmation: boolean; recoveryKey: string | null }>;
   signOut: () => Promise<void>;
   /** Re-read session from localStorage (e.g. after OTP login) */
   refreshAuth: () => void;
@@ -40,7 +40,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signUpWithEmail = async (email: string, password: string) => {
-    const { error, session } = await customAuth.signUp(email, password);
+    const { error, session, recoveryKey } = await customAuth.signUp(email, password);
     if (!error && session) {
       setSession(session);
       setUser(session.user);
@@ -49,6 +49,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       error,
       // Sign up completes immediately (no email confirmation needed)
       needsEmailConfirmation: false,
+      recoveryKey: recoveryKey ?? null,
     };
   };
 

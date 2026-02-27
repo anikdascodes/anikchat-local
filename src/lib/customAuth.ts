@@ -29,6 +29,8 @@ interface StoredCredential {
   salt: string;         // Per-user random salt, base64
   userId: string;
   createdAt: string;
+  recoveryKeyHash?: string; // PBKDF2-hashed recovery key, base64
+  recoveryKeySalt?: string; // Salt for the recovery key hash, base64
 }
 
 const CREDENTIALS_KEY = 'auth_credentials';
@@ -197,26 +199,74 @@ function clearFailedAttempts(email: string): void {
   loginAttempts.delete(email);
 }
 
+// ─── Recovery Key ────────────────────────────────────────────
+
+const RECOVERY_KEY_LENGTH = 24; // 24-char alphanumeric key
+const RECOVERY_KEY_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O/1/I to avoid confusion
+
+/**
+ * Generate a human-readable recovery key (24 chars, alphanumeric, no ambiguous chars).
+ * Formatted as XXXX-XXXX-XXXX-XXXX-XXXX-XXXX for readability.
+ */
+function generateRecoveryKey(): string {
+  const arr = crypto.getRandomValues(new Uint8Array(RECOVERY_KEY_LENGTH));
+  const raw = Array.from(arr)
+    .map(b => RECOVERY_KEY_CHARS[b % RECOVERY_KEY_CHARS.length])
+    .join('');
+  // Format as groups of 4
+  return raw.match(/.{1,4}/g)!.join('-');
+}
+
+/**
+ * Normalize a recovery key for comparison (strip dashes, uppercase).
+ */
+function normalizeRecoveryKey(key: string): string {
+  return key.replace(/-/g, '').toUpperCase();
+}
+
+/**
+ * Store the hashed recovery key for a user.
+ */
+async function storeRecoveryKeyHash(
+  credentials: Record<string, StoredCredential>,
+  userId: string,
+  recoveryKey: string,
+): Promise<void> {
+  const credential = Object.values(credentials).find(c => c.userId === userId);
+  if (!credential) return;
+
+  const salt = generateSalt();
+  const normalized = normalizeRecoveryKey(recoveryKey);
+  const hash = await hashPassword(normalized, salt);
+
+  credential.recoveryKeyHash = hash;
+  credential.recoveryKeySalt = bufToBase64(salt);
+  localStorage.setItem(CREDENTIALS_KEY, JSON.stringify(credentials));
+}
+
 // ─── Public API ──────────────────────────────────────────────
 
 /**
- * Sign up with email and password
+ * Sign up with email and password.
+ * Returns a recoveryKey that the user MUST save — it's the only
+ * way to regain access if the password is forgotten (when EmailJS is not set up).
  */
 export async function signUp(email: string, password: string): Promise<{
   error: string | null;
   session: AuthSession | null;
+  recoveryKey: string | null;
 }> {
   if (!email || !password) {
-    return { error: 'Email and password are required', session: null };
+    return { error: 'Email and password are required', session: null, recoveryKey: null };
   }
 
   if (password.length < 8) {
-    return { error: 'Password must be at least 8 characters', session: null };
+    return { error: 'Password must be at least 8 characters', session: null, recoveryKey: null };
   }
 
   // Basic email format validation
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    return { error: 'Please enter a valid email address', session: null };
+    return { error: 'Please enter a valid email address', session: null, recoveryKey: null };
   }
 
   const credentials = getStoredCredentials();
@@ -226,7 +276,7 @@ export async function signUp(email: string, password: string): Promise<{
     c => c.email.toLowerCase() === email.toLowerCase()
   );
   if (existingUser) {
-    return { error: 'User with this email already exists', session: null };
+    return { error: 'User with this email already exists', session: null, recoveryKey: null };
   }
 
   try {
@@ -244,6 +294,10 @@ export async function signUp(email: string, password: string): Promise<{
     };
     localStorage.setItem(CREDENTIALS_KEY, JSON.stringify(credentials));
 
+    // Generate and hash a recovery key for password-less account recovery
+    const recoveryKey = generateRecoveryKey();
+    await storeRecoveryKeyHash(credentials, userId, recoveryKey);
+
     const token = await generateToken(userId, email.toLowerCase(), salt);
     const session: AuthSession = {
       user: { id: userId, email: email.toLowerCase(), created_at: now },
@@ -253,10 +307,10 @@ export async function signUp(email: string, password: string): Promise<{
     };
 
     setSession(session);
-    return { error: null, session };
+    return { error: null, session, recoveryKey };
   } catch (err) {
     logger.error('Sign up error', err);
-    return { error: 'Failed to sign up', session: null };
+    return { error: 'Failed to sign up', session: null, recoveryKey: null };
   }
 }
 
@@ -578,6 +632,136 @@ export async function refreshSession(): Promise<boolean> {
 
     setSession(newSession);
     return true;
+  } catch {
+    return false;
+  }
+}
+
+// ─── Recovery Key — Account Recovery ─────────────────────────
+
+/**
+ * Verify a recovery key and sign the user in.
+ * This is the secure fallback when EmailJS is not configured.
+ */
+export async function verifyRecoveryKeyAndSignIn(
+  email: string,
+  recoveryKey: string,
+): Promise<{
+  error: string | null;
+  session: AuthSession | null;
+}> {
+  if (!email || !recoveryKey) {
+    return { error: 'Email and recovery key are required', session: null };
+  }
+
+  const normalizedEmail = email.toLowerCase();
+
+  // Rate limiting
+  const rateLimitErr = checkRateLimit(`recovery:${normalizedEmail}`);
+  if (rateLimitErr) return { error: rateLimitErr, session: null };
+
+  try {
+    const credentials = getStoredCredentials();
+    const credential = Object.values(credentials).find(c => c.email === normalizedEmail);
+
+    if (!credential) {
+      recordFailedAttempt(`recovery:${normalizedEmail}`);
+      return { error: 'Invalid email or recovery key', session: null };
+    }
+
+    if (!credential.recoveryKeyHash || !credential.recoveryKeySalt) {
+      return {
+        error: 'No recovery key set for this account. Recovery keys are generated at signup.',
+        session: null,
+      };
+    }
+
+    // Verify the recovery key hash
+    const salt = base64ToBuf(credential.recoveryKeySalt);
+    const normalized = normalizeRecoveryKey(recoveryKey);
+    const hash = await hashPassword(normalized, salt);
+
+    if (hash !== credential.recoveryKeyHash) {
+      recordFailedAttempt(`recovery:${normalizedEmail}`);
+      return { error: 'Invalid email or recovery key', session: null };
+    }
+
+    clearFailedAttempts(`recovery:${normalizedEmail}`);
+
+    // Create a session
+    const credSalt = base64ToBuf(credential.salt);
+    const token = await generateToken(credential.userId, normalizedEmail, credSalt);
+    const now = new Date().toISOString();
+    const session: AuthSession = {
+      user: {
+        id: credential.userId,
+        email: normalizedEmail,
+        created_at: credential.createdAt,
+      },
+      access_token: token,
+      created_at: now,
+      expires_at: Date.now() + TOKEN_EXPIRY_MS,
+    };
+
+    setSession(session);
+    return { error: null, session };
+  } catch (err) {
+    logger.error('Recovery key verification error', err);
+    return { error: 'Failed to verify recovery key', session: null };
+  }
+}
+
+/**
+ * Regenerate a recovery key for the currently authenticated user.
+ * Requires the current password for verification. Invalidates the old key.
+ * Returns the new plaintext recovery key (shown once, never stored).
+ */
+export async function regenerateRecoveryKey(
+  userId: string,
+  currentPassword: string,
+): Promise<{
+  error: string | null;
+  recoveryKey: string | null;
+}> {
+  if (!userId || !currentPassword) {
+    return { error: 'User ID and current password are required', recoveryKey: null };
+  }
+
+  try {
+    const credentials = getStoredCredentials();
+    const credential = Object.values(credentials).find(c => c.userId === userId);
+    if (!credential) {
+      return { error: 'Account not found', recoveryKey: null };
+    }
+
+    // Verify current password
+    const salt = base64ToBuf(credential.salt);
+    const passwordHash = await hashPassword(currentPassword, salt);
+    if (passwordHash !== credential.passwordHash) {
+      return { error: 'Current password is incorrect', recoveryKey: null };
+    }
+
+    // Generate a new recovery key
+    const recoveryKey = generateRecoveryKey();
+    await storeRecoveryKeyHash(credentials, userId, recoveryKey);
+
+    return { error: null, recoveryKey };
+  } catch (err) {
+    logger.error('Regenerate recovery key error', err);
+    return { error: 'Failed to regenerate recovery key', recoveryKey: null };
+  }
+}
+
+/**
+ * Check if a user has a recovery key set.
+ */
+export function hasRecoveryKey(email: string): boolean {
+  try {
+    const credentials = getStoredCredentials();
+    const credential = Object.values(credentials).find(
+      c => c.email === email.toLowerCase()
+    );
+    return !!(credential?.recoveryKeyHash && credential?.recoveryKeySalt);
   } catch {
     return false;
   }

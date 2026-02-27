@@ -3,13 +3,13 @@
  */
 
 import { useState, useCallback, useEffect } from 'react';
-import { Eye, EyeOff, Lock, Mail, Calendar, Send } from 'lucide-react';
+import { Eye, EyeOff, Lock, Mail, Calendar, Send, KeyRound } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useAuth } from '@/hooks/useAuth';
-import { changePassword } from '@/lib/customAuth';
+import { changePassword, regenerateRecoveryKey } from '@/lib/customAuth';
 import { getEmailJSConfig, saveEmailJSConfig, type EmailJSConfig } from '@/lib/emailService';
 import { toast } from 'sonner';
 
@@ -29,6 +29,13 @@ export function ProfileSettings() {
   const [emailjsTemplateId, setEmailjsTemplateId] = useState('');
   const [emailjsPublicKey, setEmailjsPublicKey] = useState('');
   const [emailjsSaved, setEmailjsSaved] = useState(false);
+
+  // Recovery key state
+  const [recoveryPassword, setRecoveryPassword] = useState('');
+  const [showRecoveryPassword, setShowRecoveryPassword] = useState(false);
+  const [newRecoveryKey, setNewRecoveryKey] = useState<string | null>(null);
+  const [isRegenerating, setIsRegenerating] = useState(false);
+  const [recoveryKeySaved, setRecoveryKeySaved] = useState(false);
 
   // Load saved EmailJS config on mount
   useEffect(() => {
@@ -60,6 +67,28 @@ export function ProfileSettings() {
     toast.success('Email service configured');
     setTimeout(() => setEmailjsSaved(false), 2000);
   }, [emailjsServiceId, emailjsTemplateId, emailjsPublicKey]);
+
+  const handleRegenerateRecoveryKey = useCallback(async () => {
+    if (!user) return;
+    if (!recoveryPassword) {
+      toast.error('Enter your current password to regenerate the recovery key');
+      return;
+    }
+
+    setIsRegenerating(true);
+    try {
+      const { error, recoveryKey } = await regenerateRecoveryKey(user.id, recoveryPassword);
+      if (error) {
+        toast.error(error);
+      } else if (recoveryKey) {
+        setNewRecoveryKey(recoveryKey);
+        setRecoveryKeySaved(false);
+        toast.success('New recovery key generated — save it now!');
+      }
+    } finally {
+      setIsRegenerating(false);
+    }
+  }, [user, recoveryPassword]);
 
   const handleChangePassword = useCallback(async () => {
     if (!user) return;
@@ -221,6 +250,106 @@ export function ProfileSettings() {
           >
             {isChanging ? 'Changing…' : 'Change Password'}
           </Button>
+        </CardContent>
+      </Card>
+
+      {/* Recovery Key */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <KeyRound className="h-5 w-5" />
+            Recovery Key
+          </CardTitle>
+          <CardDescription>
+            Your recovery key is the only way to regain access if you forget your password
+            (when email-based reset is not configured). You can regenerate it here — the old key
+            will be invalidated.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {newRecoveryKey ? (
+            /* Display the newly generated recovery key */
+            <>
+              <div className="p-4 rounded-lg border-2 border-dashed border-yellow-500/50 bg-yellow-50/10 space-y-3">
+                <p className="text-xs font-medium text-yellow-600 dark:text-yellow-400 uppercase tracking-wide">
+                  New Recovery Key — Save This Now
+                </p>
+                <div className="select-all text-center text-lg font-mono font-bold tracking-wider bg-background rounded-md p-3 border">
+                  {newRecoveryKey}
+                </div>
+                <ul className="text-xs text-muted-foreground space-y-1">
+                  <li>• Write it down or save it in a password manager</li>
+                  <li>• This key will <strong>not be shown again</strong> after you dismiss it</li>
+                  <li>• Your previous recovery key has been invalidated</li>
+                </ul>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="recovery-key-saved-settings"
+                  checked={recoveryKeySaved}
+                  onChange={(e) => setRecoveryKeySaved(e.target.checked)}
+                  className="rounded border-gray-300"
+                />
+                <Label htmlFor="recovery-key-saved-settings" className="text-sm cursor-pointer">
+                  I have saved my recovery key
+                </Label>
+              </div>
+
+              <Button
+                variant="outline"
+                className="w-full"
+                disabled={!recoveryKeySaved}
+                onClick={() => {
+                  setNewRecoveryKey(null);
+                  setRecoveryPassword('');
+                  setRecoveryKeySaved(false);
+                }}
+              >
+                Done
+              </Button>
+            </>
+          ) : (
+            /* Password prompt to regenerate */
+            <>
+              <div className="space-y-2">
+                <Label htmlFor="recovery-password">Current Password</Label>
+                <div className="relative">
+                  <Input
+                    id="recovery-password"
+                    type={showRecoveryPassword ? 'text' : 'password'}
+                    value={recoveryPassword}
+                    onChange={(e) => setRecoveryPassword(e.target.value)}
+                    placeholder="Enter current password to continue"
+                    autoComplete="current-password"
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7"
+                    onClick={() => setShowRecoveryPassword(!showRecoveryPassword)}
+                    tabIndex={-1}
+                  >
+                    {showRecoveryPassword ? (
+                      <EyeOff className="h-4 w-4 text-muted-foreground" />
+                    ) : (
+                      <Eye className="h-4 w-4 text-muted-foreground" />
+                    )}
+                  </Button>
+                </div>
+              </div>
+              <Button
+                onClick={handleRegenerateRecoveryKey}
+                disabled={!recoveryPassword || isRegenerating}
+                className="w-full"
+                variant="outline"
+              >
+                {isRegenerating ? 'Generating…' : 'Regenerate Recovery Key'}
+              </Button>
+            </>
+          )}
         </CardContent>
       </Card>
 
