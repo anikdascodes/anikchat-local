@@ -1,11 +1,11 @@
 /**
- * DataSettings — Cloud storage management
+ * DataSettings — Local browser storage management
  *
- * All data lives in Supabase. No local folder or IndexedDB selectors needed.
+ * All data lives in IndexedDB (client-side). No external services used.
  */
 
-import { useCallback, useRef, useState } from 'react';
-import { Cloud, CheckCircle2, Trash2, Download, AlertTriangle, Database, Upload } from 'lucide-react';
+import { useCallback, useRef, useState, useEffect } from 'react';
+import { HardDrive, CheckCircle2, Trash2, Download, AlertTriangle, Database, Upload, ImageIcon } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -13,6 +13,7 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Conversation, APIConfig } from '@/types/chat';
 import { logger } from '@/lib/logger';
 import { toast } from 'sonner';
+import { getMediaStats, clearAllMedia, type MediaStats } from '@/lib/mediaStore';
 
 interface DataSettingsProps {
   conversations: Conversation[];
@@ -47,6 +48,25 @@ export function DataSettings({
   const [importDialogOpen, setImportDialogOpen]     = useState(false);
   const [pendingImport,    setPendingImport]         = useState<{ config?: APIConfig; conversations?: Conversation[] } | null>(null);
   const [pendingImportSummary, setPendingImportSummary] = useState('');
+
+  // ── Media storage stats ──────────────────────────────────
+  const [mediaStats, setMediaStats] = useState<MediaStats>({ count: 0, totalBytes: 0 });
+  const [clearMediaDialogOpen, setClearMediaDialogOpen] = useState(false);
+
+  useEffect(() => {
+    getMediaStats().then(setMediaStats).catch(() => {});
+  }, []);
+
+  const handleClearMedia = useCallback(async () => {
+    try {
+      await clearAllMedia();
+      setMediaStats({ count: 0, totalBytes: 0 });
+      toast.success('All media files cleared');
+    } catch {
+      toast.error('Failed to clear media');
+    }
+    setClearMediaDialogOpen(false);
+  }, []);
 
   // ── Import handling ──────────────────────────────────────
 
@@ -94,19 +114,19 @@ export function DataSettings({
   return (
     <div className="space-y-6">
 
-      {/* Cloud Storage Status */}
+      {/* Local Storage Status */}
       <Card>
         <CardHeader>
           <CardTitle>Storage</CardTitle>
-          <CardDescription>Your data is stored securely in Supabase cloud</CardDescription>
+          <CardDescription>Your data is stored locally in your browser</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="flex items-center gap-4 p-4 rounded-lg border-2 border-primary bg-primary/5">
-            <Cloud className="h-6 w-6 text-primary shrink-0" />
+            <HardDrive className="h-6 w-6 text-primary shrink-0" />
             <div className="flex-1 min-w-0">
-              <p className="font-medium">Supabase Cloud</p>
+              <p className="font-medium">Local Browser Storage</p>
               <p className="text-xs text-muted-foreground">
-                Encrypted at rest · Secured by Row-Level Security · Accessible on any device
+                IndexedDB · Encrypted API keys · Private to this browser
               </p>
             </div>
             <CheckCircle2 className="h-5 w-5 text-primary shrink-0" />
@@ -118,7 +138,7 @@ export function DataSettings({
       <Card>
         <CardHeader>
           <CardTitle>Storage Overview</CardTitle>
-          <CardDescription>Summary of your cloud data</CardDescription>
+          <CardDescription>Summary of your local data</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="flex items-center justify-between p-4 bg-muted/50 rounded-lg">
@@ -130,6 +150,41 @@ export function DataSettings({
             </div>
             <Database className="h-10 w-10 text-muted-foreground/50" />
           </div>
+        </CardContent>
+      </Card>
+
+      {/* Media Storage — separate from chat data */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Media Storage</CardTitle>
+          <CardDescription>
+            Images are stored separately from your chat text. Clear media to free space — your conversations stay intact.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between p-4 bg-muted/50 rounded-lg">
+            <div className="flex items-center gap-3">
+              <ImageIcon className="h-8 w-8 text-muted-foreground/50" />
+              <div>
+                <div className="text-2xl font-bold">{formatBytes(mediaStats.totalBytes)}</div>
+                <div className="text-sm text-muted-foreground">
+                  {mediaStats.count} image{mediaStats.count !== 1 ? 's' : ''} cached
+                </div>
+              </div>
+            </div>
+          </div>
+          <Button
+            variant="outline"
+            className="w-full gap-2 text-orange-500 hover:text-orange-600 hover:border-orange-400"
+            onClick={() => setClearMediaDialogOpen(true)}
+            disabled={mediaStats.count === 0}
+          >
+            <Trash2 className="h-4 w-4" />
+            Clear All Media
+          </Button>
+          <p className="text-xs text-muted-foreground">
+            Clears all cached images to free storage. Chat text is not affected — images will show a &quot;cleared&quot; placeholder.
+          </p>
         </CardContent>
       </Card>
 
@@ -220,7 +275,7 @@ export function DataSettings({
               Delete All Data
             </Button>
             <p className="text-xs text-muted-foreground text-center mt-2">
-              Removes all conversations, settings, and API keys from the cloud
+              Removes all conversations, settings, and API keys from this browser
             </p>
           </div>
         </CardContent>
@@ -234,6 +289,16 @@ export function DataSettings({
         description={`This will add ${pendingImportSummary} to your account. Existing data is not replaced.`}
         confirmLabel="Import"
         onConfirm={confirmImport}
+      />
+
+      {/* Clear media confirmation dialog */}
+      <ConfirmDialog
+        open={clearMediaDialogOpen}
+        onOpenChange={setClearMediaDialogOpen}
+        title="Clear all media?"
+        description="This will delete all cached images to free storage. Your chat text history is not affected — images in conversations will show a placeholder instead."
+        confirmLabel="Clear Media"
+        onConfirm={handleClearMedia}
       />
     </div>
   );

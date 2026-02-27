@@ -3,8 +3,8 @@
  * Backup and restore conversations
  */
 
-import * as supabaseService from './localStorageService';
-import { supabase } from '@/integrations/supabase/client';
+import * as localService from './localStorageService';
+import { getSession } from './customAuth';
 import { APIConfig, Conversation } from '@/types/chat';
 import { redactConfigForExport } from '@/lib/exportRedaction';
 
@@ -19,18 +19,19 @@ export interface ExportData {
  * Export all conversations as JSON
  */
 export async function exportAllData(): Promise<void> {
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) throw new Error('Not authenticated');
+  const session = getSession();
+  if (!session) throw new Error('Not authenticated');
+  const userId = session.user.id;
 
-  const convIds = await supabaseService.listConversations();
+  const convIds = await localService.listConversations(userId);
   const conversations: Conversation[] = [];
 
   for (const id of convIds) {
-    const conv = await supabaseService.getConversation(id);
+    const conv = await localService.getConversation(id, userId);
     if (conv) conversations.push(conv);
   }
 
-  const config = await supabaseService.getConfig(user.id);
+  const config = await localService.getConfig(userId);
 
   const exportData: ExportData = {
     version: 1,
@@ -77,8 +78,9 @@ export async function exportAsMarkdown(conversation: Conversation): Promise<void
  * Import conversations from JSON backup
  */
 export async function importData(file: File): Promise<{ imported: number; skipped: number }> {
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) throw new Error('Not authenticated');
+  const session = getSession();
+  if (!session) throw new Error('Not authenticated');
+  const userId = session.user.id;
 
   const text = await file.text();
   const data = JSON.parse(text) as ExportData;
@@ -91,12 +93,12 @@ export async function importData(file: File): Promise<{ imported: number; skippe
   let skipped = 0;
 
   for (const conv of data.conversations) {
-    const existing = await supabaseService.getConversation(conv.id);
+    const existing = await localService.getConversation(conv.id, userId);
     if (existing) {
       skipped++;
       continue;
     }
-    await supabaseService.saveConversation(conv, user.id);
+    await localService.saveConversation(conv, userId);
     imported++;
   }
 

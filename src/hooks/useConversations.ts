@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef, startTransition } from 'react
 import { toast } from 'sonner';
 import { Conversation, generateId } from '@/types/chat';
 import { exportAsMarkdown, downloadFile } from '@/lib/export';
-import * as supabaseService from '@/lib/localStorageService';
+import * as localService from '@/lib/localStorageService';
 import { deleteConversationMemory } from '@/lib/memoryManager';
 import { useStreamingStore } from '@/stores/streamingStore';
 import { useAuth } from '@/hooks/useAuth';
@@ -39,18 +39,18 @@ export function useConversations(): UseConversationsReturn {
     : conversations.find((c) => c.id === activeConversationId);
   const isStreaming = useStreamingStore(state => state.isLoading);
 
-  // Load conversations from Supabase on mount
+  // Load conversations from IndexedDB on mount
   useEffect(() => {
     if (!user) return;
     const loadConversations = async () => {
       try {
-        // Load IDs from Supabase, pre-fetch the 5 most recent conversations
-        const ids = await supabaseService.listConversations();
+        // Load IDs, pre-fetch the 5 most recent conversations
+        const ids = await localService.listConversations(user.id);
         if (ids.length > 0) {
           const targetIds = ids.slice(0, 5);
 
           const loadedConvs = (await Promise.all(
-            targetIds.map(id => supabaseService.getConversation(id))
+            targetIds.map(id => localService.getConversation(id, user.id))
           )).filter((c): c is Conversation => !!c);
 
           setConversationsState(prev => {
@@ -110,10 +110,10 @@ export function useConversations(): UseConversationsReturn {
 
       const t = setTimeout(async () => {
         try {
-          if (user) await supabaseService.saveConversation(conv, user.id);
+          if (user) await localService.saveConversation(conv, user.id);
           lastSavedUpdatedAtRef.current.set(conv.id, updatedAtMs);
         } catch (error) {
-          logger.debug('Failed to save conversation to Supabase:', error);
+          logger.debug('Failed to save conversation:', error);
           // UI remains usable with in-memory state.
         }
       }, 1500); // 1.5s debounce
@@ -158,7 +158,7 @@ export function useConversations(): UseConversationsReturn {
   const deleteConversation = useCallback(
     async (id: string) => {
       // Delete from storage
-      await supabaseService.deleteConversation(id);
+      await localService.deleteConversation(id, user?.id);
       await deleteConversationMemory(id);
 
       setConversationsState((prev) => {
@@ -203,7 +203,7 @@ export function useConversations(): UseConversationsReturn {
     // Optimization D: Lazy load messages if it's a skeleton
     const conv = conversations.find(c => c.id === id);
     if (conv && conv.isSkeleton) {
-      const fullConv = await supabaseService.getConversation(id);
+      const fullConv = await localService.getConversation(id, user?.id);
       if (fullConv) {
         startTransition(() => {
           setConversationsState(prev => prev.map(c => c.id === id ? fullConv : c));

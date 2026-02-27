@@ -3,6 +3,7 @@ import { MessageSquare } from 'lucide-react';
 import { Conversation } from '@/types/chat';
 import { searchConversations, SearchResult, getHighlightParts } from '@/lib/searchService';
 import { useDebounce } from '@/hooks/useDebounce';
+import { useAuth } from '@/hooks/useAuth';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { Command, CommandInput, CommandList, CommandGroup, CommandItem } from '@/components/ui/command';
 
@@ -19,6 +20,7 @@ export function ConversationSearch({
   isOpen,
   onClose,
 }: ConversationSearchProps) {
+  const { user } = useAuth();
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
@@ -43,7 +45,7 @@ export function ConversationSearch({
     }
 
     setIsSearching(true);
-    searchConversations(debouncedQuery).then((res) => {
+    searchConversations(debouncedQuery, user?.id ?? '').then((res) => {
       setResults(res);
       setIsSearching(false);
     });

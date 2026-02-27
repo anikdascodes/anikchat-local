@@ -2,7 +2,7 @@ import { Pencil } from 'lucide-react';
 import { useState, useMemo, memo, useCallback, useEffect } from 'react';
 import { Message } from '@/types/chat';
 import { MarkdownRenderer } from './MarkdownRenderer';
-import { loadMessageImages, isImageRef } from '@/lib/imageStorage';
+import { loadMessageImages } from '@/lib/imageStorage';
 import { ImageLightbox, ThinkingBlock, MessageEditor, MessageActions, BranchNavigator } from './chat';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
@@ -51,21 +51,16 @@ export const ChatMessage = memo(function ChatMessage({
 }: ChatMessageProps) {
   const [showThinking, setShowThinking] = useState(false);
   const [expandedImage, setExpandedImage] = useState<string | null>(null);
-  const [loadedImages, setLoadedImages] = useState<string[]>([]);
+  const [loadedImages, setLoadedImages] = useState<(string | null)[]>([]);
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState('');
 
   const isUser = message.role === 'user';
 
-  // Load images from refs
+  // Load images from refs (null = media was cleared by user)
   useEffect(() => {
     if (message.images?.length) {
-      const hasRefs = message.images.some(isImageRef);
-      if (hasRefs) {
-        loadMessageImages(message.images).then(setLoadedImages);
-      } else {
-        setLoadedImages(message.images);
-      }
+      loadMessageImages(message.images).then(setLoadedImages);
     } else {
       setLoadedImages([]);
     }
@@ -156,19 +151,33 @@ export const ChatMessage = memo(function ChatMessage({
               {loadedImages.length > 0 && (
                 <div className="flex flex-wrap gap-2 mb-3">
                   {loadedImages.map((img, idx) => (
-                    <Button
-                      key={idx}
-                      variant="ghost"
-                      className="p-0 h-auto w-auto focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 rounded-lg transition-transform hover:scale-[1.02]"
-                      onClick={() => setExpandedImage(img)}
-                    >
-                      <img
-                        src={img}
-                        alt={`Attachment ${idx + 1}`}
-                        className="max-w-48 max-h-48 rounded-lg object-cover border border-border shadow-sm hover:shadow-md transition-shadow"
-                        loading="lazy"
-                      />
-                    </Button>
+                    img ? (
+                      <Button
+                        key={idx}
+                        variant="ghost"
+                        className="p-0 h-auto w-auto focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 rounded-lg transition-transform hover:scale-[1.02]"
+                        onClick={() => setExpandedImage(img)}
+                      >
+                        <img
+                          src={img}
+                          alt={`Attachment ${idx + 1}`}
+                          className="max-w-48 max-h-48 rounded-lg object-cover border border-border shadow-sm hover:shadow-md transition-shadow"
+                          loading="lazy"
+                        />
+                      </Button>
+                    ) : (
+                      <div
+                        key={idx}
+                        className="flex items-center justify-center max-w-48 h-32 rounded-lg border-2 border-dashed border-muted-foreground/30 bg-muted/40 text-muted-foreground"
+                      >
+                        <div className="text-center px-3">
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 mx-auto mb-1 opacity-40" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                          </svg>
+                          <p className="text-xs">Image cleared</p>
+                        </div>
+                      </div>
+                    )
                   ))}
                 </div>
               )}

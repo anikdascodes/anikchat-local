@@ -7,7 +7,7 @@
  *
  * Security model:
  *   In transit    — HTTPS / TLS
- *   At rest       — Supabase infrastructure AES-256 + our own AES-GCM layer
+ *   At rest       — AES-GCM 256-bit encryption in IndexedDB
  *   Key material  — stored NOWHERE; re-derived on each page load from userId
  *   Extractable   — false; raw key bytes are never accessible to any JS code
  *

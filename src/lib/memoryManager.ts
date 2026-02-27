@@ -3,9 +3,9 @@
  *
  * Embeddings and summaries live in memory for the current page session.
  * Conversation summaries persist durably via the `summary` field on the
- * Conversation object, which is saved to Supabase by useConversations.ts.
+ * Conversation object, which is saved to IndexedDB by useConversations.ts.
  *
- * Nothing is written to localStorage, IndexedDB, or any local store.
+ * Nothing is written to localStorage or any external store.
  */
 
 import { Message } from '@/types/chat';
@@ -159,7 +159,7 @@ export async function retrieveRelevantMessages(
 
 /**
  * Get the in-session conversation summary (populated by saveConversationSummary).
- * Returns null on page load — the caller must fall back to conv.summary from Supabase.
+ * Returns null on page load — the caller must fall back to conv.summary from IndexedDB.
  */
 export async function getConversationSummary(conversationId: string): Promise<ConversationSummary | null> {
   return summaryStore.get(conversationId) ?? null;
@@ -168,7 +168,7 @@ export async function getConversationSummary(conversationId: string): Promise<Co
 /**
  * Save a conversation summary to the in-session cache.
  * The durable copy is persisted automatically through the conversation object
- * (conv.summary) which is saved to Supabase by useConversations.ts.
+ * (conv.summary) which is saved to IndexedDB by useConversations.ts.
  */
 export async function saveConversationSummary(
   conversationId: string,

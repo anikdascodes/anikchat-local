@@ -7,7 +7,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { APIConfig, Conversation, defaultConfig } from '@/types/chat';
 import { useConfig } from '@/hooks/useConfig';
 import { useAuth } from '@/hooks/useAuth';
-import * as supabaseService from '@/lib/localStorageService';
+import * as localService from '@/lib/localStorageService';
 import { toast } from 'sonner';
 import { redactConfigForExport } from '@/lib/exportRedaction';
 import { logger } from '@/lib/logger';
@@ -37,20 +37,20 @@ function Settings() {
   const [clearConversationsOpen, setClearConversationsOpen] = useState(false);
   const [clearAllDataOpen, setClearAllDataOpen] = useState(false);
 
-  // Load conversation list from Supabase
+  // Load conversation list from local storage
   useEffect(() => {
     if (!user) return;
     const loadConversations = async () => {
       try {
-        const ids = await supabaseService.listConversations();
+        const ids = await localService.listConversations(user.id);
         // Load the first 20 for the settings data view (metadata only)
         const convs = (await Promise.all(
-          ids.slice(0, 20).map(id => supabaseService.getConversation(id))
+          ids.slice(0, 20).map(id => localService.getConversation(id, user.id))
         )).filter((c): c is Conversation => !!c);
         convs.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
         setConversations(convs);
       } catch (error) {
-        logger.debug('Failed to load conversations from Supabase in Settings:', error);
+        logger.debug('Failed to load conversations in Settings:', error);
       }
     };
     loadConversations();
@@ -96,22 +96,22 @@ function Settings() {
 
   const confirmDeleteConversation = useCallback(async () => {
     if (!deleteConversationId) return;
-    await supabaseService.deleteConversation(deleteConversationId);
+    await localService.deleteConversation(deleteConversationId, user?.id);
     setConversations((prev) => prev.filter((c) => c.id !== deleteConversationId));
     setDeleteConversationId(null);
     toast.success('Conversation deleted');
   }, [deleteConversationId]);
 
   const confirmClearConversations = useCallback(async () => {
-    // Delete all via Supabase (cascade removes messages)
-    await Promise.all(conversations.map(c => supabaseService.deleteConversation(c.id)));
+    // Delete all conversations
+    await Promise.all(conversations.map(c => localService.deleteConversation(c.id, user?.id)));
     setConversations([]);
     setClearConversationsOpen(false);
     toast.success('All conversations deleted');
   }, [conversations]);
 
   const confirmClearAllData = useCallback(async () => {
-    if (user) await supabaseService.deleteAllUserData(user.id);
+    if (user) await localService.deleteAllUserData(user.id);
     safeLocalStorageRemove('openchat-config');
     safeLocalStorageRemove('openchat-conversations-metadata');
     safeLocalStorageRemove('openchat-active-conversation');
@@ -144,10 +144,10 @@ function Settings() {
       const existingIds = new Set(conversations.map(c => c.id));
       const newConvs = data.conversations.filter(c => !existingIds.has(c.id));
       
-      // Save new conversations to Supabase
+      // Save new conversations to local storage
       if (user) {
         for (const conv of newConvs) {
-          await supabaseService.saveConversation(conv, user.id);
+          await localService.saveConversation(conv, user.id);
         }
       }
       

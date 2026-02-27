@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
 import { ConversationFolder, Conversation, generateId } from '@/types/chat';
-import * as supabaseService from '@/lib/localStorageService';
+import * as localService from '@/lib/localStorageService';
 import { useAuth } from '@/hooks/useAuth';
 import { logger } from '@/lib/logger';
 
@@ -20,10 +20,10 @@ export function useFolders(): UseFoldersReturn {
   const [folders, setFolders] = useState<ConversationFolder[]>([]);
   const [activeFolder, setActiveFolder] = useState<string | null>(null);
 
-  // Load folders from Supabase on mount
+  // Load folders on mount
   useEffect(() => {
     if (!user) return;
-    supabaseService.listFolders()
+    localService.listFolders(user.id)
       .then(setFolders)
       .catch(e => logger.error('Failed to load folders', e));
   }, [user]);
@@ -37,7 +37,7 @@ export function useFolders(): UseFoldersReturn {
       createdAt: new Date(),
     };
     setFolders(prev => [...prev, newFolder]);
-    supabaseService.saveFolder(newFolder, user.id)
+    localService.saveFolder(newFolder, user.id)
       .catch(e => logger.error('Failed to save folder', e));
     toast.success(`Folder "${name}" created`);
   }, [user]);
@@ -45,7 +45,7 @@ export function useFolders(): UseFoldersReturn {
   const deleteFolder = useCallback((id: string) => {
     setFolders(prev => prev.filter(f => f.id !== id));
     if (activeFolder === id) setActiveFolder(null);
-    supabaseService.deleteFolder(id)
+    localService.deleteFolder(id)
       .catch(e => logger.error('Failed to delete folder', e));
     toast.success('Folder deleted');
   }, [activeFolder]);

@@ -1,9 +1,7 @@
 /**
  * Local Storage Service — Client-side storage layer
- * Replaces Supabase with IndexedDB + localStorage
- * Conversations + messages stored in browser IndexedDB
- * 
- * API mirrors supabaseService for easy migration
+ * Uses IndexedDB for persistent browser-local storage.
+ * Conversations + messages stored in browser IndexedDB.
  */
 
 import { logger } from './logger';
@@ -77,17 +75,14 @@ function rowToMessage(row: StoredMessage): Message {
 
 // ─── Conversations ──────────────────────────────────────────
 
-export async function listConversations(userId?: string): Promise<string[]> {
+export async function listConversations(userId: string): Promise<string[]> {
+  if (!userId) return [];
   try {
     const all = await getAllData<StoredConversation>('conversations');
     
-    // Filter by user if provided
-    const filtered = userId
-      ? all.filter(c => c.user_id === userId)
-      : all;
-    
-    // Sort by updated_at descending
-    return filtered
+    // Always filter by user — enforce data isolation
+    return all
+      .filter(c => c.user_id === userId)
       .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
       .map(c => c.id);
   } catch (err) {
@@ -96,10 +91,16 @@ export async function listConversations(userId?: string): Promise<string[]> {
   }
 }
 
-export async function getConversation(id: string): Promise<Conversation | null> {
+export async function getConversation(id: string, userId?: string): Promise<Conversation | null> {
   try {
     const conv = await getData<StoredConversation>('conversations', id);
     if (!conv) return null;
+
+    // Ownership check: if userId is provided, verify the conversation belongs to that user
+    if (userId && conv.user_id !== userId) {
+      logger.warn('getConversation: ownership check failed', { id, userId, ownerId: conv.user_id });
+      return null;
+    }
 
     const messages = await queryData<StoredMessage>('messages', 'conversation_id', id);
     const sortedMessages = messages
@@ -155,8 +156,17 @@ export async function saveConversation(conv: Conversation, userId: string): Prom
   }
 }
 
-export async function deleteConversation(id: string): Promise<void> {
+export async function deleteConversation(id: string, userId?: string): Promise<void> {
   try {
+    // Ownership check before deletion
+    if (userId) {
+      const conv = await getData<StoredConversation>('conversations', id);
+      if (conv && conv.user_id !== userId) {
+        logger.warn('deleteConversation: ownership check failed', { id, userId });
+        return;
+      }
+    }
+
     // Delete conversation
     await deleteData('conversations', id);
     
@@ -181,13 +191,13 @@ interface StoredFolder {
   updated_at: string;
 }
 
-export async function listFolders(userId?: string) {
+export async function listFolders(userId: string) {
+  if (!userId) return [];
   try {
     const all = await getAllData<StoredFolder>('folders');
     
-    const filtered = userId
-      ? all.filter(f => f.user_id === userId)
-      : all;
+    // Always filter by user — enforce data isolation
+    const filtered = all.filter(f => f.user_id === userId);
     
     return filtered
       .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())

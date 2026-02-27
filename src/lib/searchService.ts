@@ -1,9 +1,9 @@
 /**
  * Conversation Search Service
- * Search across all conversations using text matching and optional embeddings
+ * Search across user's own conversations using text matching
  */
 
-import * as supabaseService from './localStorageService';
+import * as localService from './localStorageService';
 import { Conversation } from '@/types/chat';
 
 export interface SearchResult {
@@ -17,18 +17,19 @@ export interface SearchResult {
 }
 
 /**
- * Simple text search across all conversations
+ * Simple text search across the authenticated user's conversations only.
+ * userId is required to enforce data isolation.
  */
-export async function searchConversations(query: string, limit = 20): Promise<SearchResult[]> {
-  if (!query.trim()) return [];
+export async function searchConversations(query: string, userId: string, limit = 20): Promise<SearchResult[]> {
+  if (!query.trim() || !userId) return [];
 
   const queryLower = query.toLowerCase();
   const results: SearchResult[] = [];
 
-  const convIds = await supabaseService.listConversations();
+  const convIds = await localService.listConversations(userId);
   
   for (const id of convIds) {
-    const conv = await supabaseService.getConversation(id);
+    const conv = await localService.getConversation(id, userId);
     if (!conv) continue;
 
     for (const msg of conv.messages) {

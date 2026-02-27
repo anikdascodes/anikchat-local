@@ -90,7 +90,7 @@ const App = () => {
                     <Route path="/" element={<ProtectedRoute><Index /></ProtectedRoute>} />
                     <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
                     <Route path="/transcribe" element={<ProtectedRoute><TranscribeVideo /></ProtectedRoute>} />
-                    <Route path="*" element={<NotFound />} />
+                    <Route path="*" element={<ProtectedRoute><NotFound /></ProtectedRoute>} />
                   </Routes>
                 </Suspense>
               </AuthProvider>
