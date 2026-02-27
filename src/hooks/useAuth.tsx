@@ -11,6 +11,8 @@ interface AuthContextValue {
   signInWithEmail: (email: string, password: string) => Promise<{ error: string | null }>;
   signUpWithEmail: (email: string, password: string) => Promise<{ error: string | null; needsEmailConfirmation: boolean }>;
   signOut: () => Promise<void>;
+  /** Re-read session from localStorage (e.g. after OTP login) */
+  refreshAuth: () => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -59,8 +61,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   };
 
+  const refreshAuth = () => {
+    const currentSession = customAuth.getSession();
+    setSession(currentSession);
+    setUser(currentSession?.user ?? null);
+  };
+
   return (
-    <AuthContext.Provider value={{ user, session, loading, signInWithEmail, signUpWithEmail, signOut }}>
+    <AuthContext.Provider value={{ user, session, loading, signInWithEmail, signUpWithEmail, signOut, refreshAuth }}>
       {children}
     </AuthContext.Provider>
   );

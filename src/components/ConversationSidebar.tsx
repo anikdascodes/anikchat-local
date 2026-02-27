@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Plus, MessageSquare, Trash2, Settings, Download, Menu, X,
   Pencil, Check, XCircle, Search, FolderPlus, ChevronRight,
-  ChevronDown, Folder, MoreHorizontal, FolderOpen, Video, LogOut
+  ChevronDown, Folder, MoreHorizontal, FolderOpen, Video, LogOut, UserCircle
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { Conversation, ConversationFolder, generateId } from '@/types/chat';
@@ -770,6 +770,15 @@ export const ConversationSidebar = memo(function ConversationSidebar({
             <Settings className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors" />
             <span className="flex-1 text-left text-muted-foreground group-hover:text-foreground transition-colors">Settings</span>
             <kbd className="px-1.5 py-0.5 text-[10px] bg-sidebar-accent rounded font-mono text-muted-foreground">⌘,</kbd>
+          </Button>
+          <Button
+            variant="ghost"
+            onClick={() => navigate('/profile')}
+            className="w-full justify-start gap-3 px-3 py-2.5 text-sm rounded-xl text-sidebar-foreground group"
+            aria-label="Open profile"
+          >
+            <UserCircle className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors" />
+            <span className="flex-1 text-left text-muted-foreground group-hover:text-foreground transition-colors">Profile</span>
           </Button>
           <UserFooter />
         </div>

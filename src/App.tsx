@@ -41,6 +41,7 @@ if (import.meta.env.DEV) requestAnimationFrame(monitorLag);
 
 // Lazy load pages for faster initial load
 const Settings = lazy(() => import("./pages/Settings"));
+const Profile = lazy(() => import("./pages/Profile"));
 const TranscribeVideo = lazy(() => import("./pages/TranscribeVideo"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 const Login = lazy(() => import("./pages/Login"));
@@ -89,6 +90,7 @@ const App = () => {
                     {/* Protected routes */}
                     <Route path="/" element={<ProtectedRoute><Index /></ProtectedRoute>} />
                     <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
+                    <Route path="/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
                     <Route path="/transcribe" element={<ProtectedRoute><TranscribeVideo /></ProtectedRoute>} />
                     <Route path="*" element={<ProtectedRoute><NotFound /></ProtectedRoute>} />
                   </Routes>

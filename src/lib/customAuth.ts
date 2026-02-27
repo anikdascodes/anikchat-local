@@ -40,6 +40,19 @@ const loginAttempts = new Map<string, { count: number; lockedUntil: number }>();
 const MAX_ATTEMPTS = 5;
 const LOCKOUT_MS = 30_000; // 30 seconds
 
+// OTP state (in localStorage so it survives refresh within the expiry window)
+const OTP_KEY = 'auth_otp_pending';
+const OTP_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
+const OTP_LENGTH = 6;
+
+interface PendingOTP {
+  email: string;
+  hashedOtp: string;   // PBKDF2-hashed OTP (never stored in plaintext)
+  salt: string;        // Salt for the OTP hash
+  expiresAt: number;
+  used: boolean;
+}
+
 // ─── Helpers ─────────────────────────────────────────────────
 
 function bufToBase64(buf: ArrayBuffer | Uint8Array): string {
@@ -313,6 +326,234 @@ export async function signIn(email: string, password: string): Promise<{
  */
 export async function signOut(): Promise<void> {
   localStorage.removeItem(SESSION_KEY);
+}
+
+// ─── OTP (One-Time Password) for Forgot Password ────────────
+
+/**
+ * Generate a cryptographically random numeric OTP.
+ */
+function generateOTP(): string {
+  const arr = crypto.getRandomValues(new Uint32Array(1));
+  return String(arr[0] % (10 ** OTP_LENGTH)).padStart(OTP_LENGTH, '0');
+}
+
+/**
+ * Request a password reset OTP for the given email.
+ * Returns the plaintext OTP (caller must send it via email).
+ * The OTP is stored hashed — the plaintext is never persisted.
+ */
+export async function requestPasswordReset(email: string): Promise<{
+  error: string | null;
+  otp: string | null;
+}> {
+  if (!email) return { error: 'Email is required', otp: null };
+
+  const normalizedEmail = email.toLowerCase();
+
+  // Check rate limiting
+  const rateLimitErr = checkRateLimit(`otp:${normalizedEmail}`);
+  if (rateLimitErr) return { error: rateLimitErr, otp: null };
+
+  // Verify the email exists
+  const credentials = getStoredCredentials();
+  const credential = Object.values(credentials).find(c => c.email === normalizedEmail);
+  if (!credential) {
+    // Don't reveal whether the account exists — still "succeed" silently
+    // but record a failed attempt to prevent enumeration
+    recordFailedAttempt(`otp:${normalizedEmail}`);
+    return { error: 'If an account with that email exists, a reset code has been sent.', otp: null };
+  }
+
+  // Generate and hash the OTP
+  const otp = generateOTP();
+  const otpSalt = generateSalt();
+  const hashedOtp = await hashPassword(otp, otpSalt);
+
+  const pending: PendingOTP = {
+    email: normalizedEmail,
+    hashedOtp,
+    salt: bufToBase64(otpSalt),
+    expiresAt: Date.now() + OTP_EXPIRY_MS,
+    used: false,
+  };
+
+  localStorage.setItem(OTP_KEY, JSON.stringify(pending));
+
+  return { error: null, otp };
+}
+
+/**
+ * Verify an OTP and sign the user in with a temporary session.
+ * The OTP is single-use — consumed immediately on success.
+ */
+export async function verifyOTPAndSignIn(email: string, otp: string): Promise<{
+  error: string | null;
+  session: AuthSession | null;
+}> {
+  if (!email || !otp) {
+    return { error: 'Email and code are required', session: null };
+  }
+
+  const normalizedEmail = email.toLowerCase();
+
+  // Rate limiting
+  const rateLimitErr = checkRateLimit(`otp:${normalizedEmail}`);
+  if (rateLimitErr) return { error: rateLimitErr, session: null };
+
+  try {
+    const raw = localStorage.getItem(OTP_KEY);
+    if (!raw) {
+      recordFailedAttempt(`otp:${normalizedEmail}`);
+      return { error: 'No reset code pending. Please request a new one.', session: null };
+    }
+
+    const pending: PendingOTP = JSON.parse(raw);
+
+    // Check email match
+    if (pending.email !== normalizedEmail) {
+      recordFailedAttempt(`otp:${normalizedEmail}`);
+      return { error: 'Invalid reset code', session: null };
+    }
+
+    // Check expiry
+    if (Date.now() > pending.expiresAt) {
+      localStorage.removeItem(OTP_KEY);
+      return { error: 'Reset code has expired. Please request a new one.', session: null };
+    }
+
+    // Check if already used
+    if (pending.used) {
+      localStorage.removeItem(OTP_KEY);
+      return { error: 'This reset code has already been used. Please request a new one.', session: null };
+    }
+
+    // Verify OTP hash
+    const otpSalt = base64ToBuf(pending.salt);
+    const hashedInput = await hashPassword(otp, otpSalt);
+    if (hashedInput !== pending.hashedOtp) {
+      recordFailedAttempt(`otp:${normalizedEmail}`);
+      return { error: 'Invalid reset code', session: null };
+    }
+
+    // Mark as used
+    pending.used = true;
+    localStorage.setItem(OTP_KEY, JSON.stringify(pending));
+
+    // Find the user credential
+    const credentials = getStoredCredentials();
+    const credential = Object.values(credentials).find(c => c.email === normalizedEmail);
+    if (!credential) {
+      return { error: 'Account not found', session: null };
+    }
+
+    clearFailedAttempts(`otp:${normalizedEmail}`);
+
+    // Create a session (user is now authenticated)
+    const salt = base64ToBuf(credential.salt);
+    const token = await generateToken(credential.userId, normalizedEmail, salt);
+    const now = new Date().toISOString();
+    const session: AuthSession = {
+      user: {
+        id: credential.userId,
+        email: normalizedEmail,
+        created_at: credential.createdAt,
+      },
+      access_token: token,
+      created_at: now,
+      expires_at: Date.now() + TOKEN_EXPIRY_MS,
+    };
+
+    setSession(session);
+
+    // Clean up OTP
+    localStorage.removeItem(OTP_KEY);
+
+    return { error: null, session };
+  } catch (err) {
+    logger.error('OTP verification error', err);
+    return { error: 'Failed to verify reset code', session: null };
+  }
+}
+
+/**
+ * Check if there's a pending (non-expired) OTP for the given email.
+ */
+export function hasPendingOTP(email: string): boolean {
+  try {
+    const raw = localStorage.getItem(OTP_KEY);
+    if (!raw) return false;
+    const pending: PendingOTP = JSON.parse(raw);
+    return (
+      pending.email === email.toLowerCase() &&
+      !pending.used &&
+      Date.now() < pending.expiresAt
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Change password for the currently authenticated user.
+ * Requires the current password for verification.
+ */
+export async function changePassword(
+  userId: string,
+  currentPassword: string,
+  newPassword: string,
+): Promise<{ error: string | null }> {
+  if (!currentPassword || !newPassword) {
+    return { error: 'Current and new passwords are required' };
+  }
+
+  if (newPassword.length < 8) {
+    return { error: 'New password must be at least 8 characters' };
+  }
+
+  if (currentPassword === newPassword) {
+    return { error: 'New password must be different from current password' };
+  }
+
+  try {
+    const credentials = getStoredCredentials();
+    const credential = Object.values(credentials).find(c => c.userId === userId);
+    if (!credential) {
+      return { error: 'Account not found' };
+    }
+
+    // Verify current password
+    const oldSalt = base64ToBuf(credential.salt);
+    const oldHash = await hashPassword(currentPassword, oldSalt);
+    if (oldHash !== credential.passwordHash) {
+      return { error: 'Current password is incorrect' };
+    }
+
+    // Generate a fresh salt for the new password
+    const newSalt = generateSalt();
+    const newHash = await hashPassword(newPassword, newSalt);
+
+    // Update credential
+    credential.passwordHash = newHash;
+    credential.salt = bufToBase64(newSalt);
+    localStorage.setItem(CREDENTIALS_KEY, JSON.stringify(credentials));
+
+    // Refresh the session token with the new salt
+    const token = await generateToken(userId, credential.email, newSalt);
+    const session = getSession();
+    if (session) {
+      setSession({
+        ...session,
+        access_token: token,
+        expires_at: Date.now() + TOKEN_EXPIRY_MS,
+      });
+    }
+
+    return { error: null };
+  } catch (err) {
+    logger.error('Change password error', err);
+    return { error: 'Failed to change password' };
+  }
 }
 
 /**
